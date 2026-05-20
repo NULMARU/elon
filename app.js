@@ -1,14 +1,17 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
+ * v1.2.0 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / 이벤트 위임
  */
 
 document.addEventListener("DOMContentLoaded", () => {
   // ── 애플리케이션 상태 (State) ──
   let state = {
     currentFileId: "default_interview", // 현재 학습 중인 파일 ID
-    currentIndex: 0,                   // 현재 학습 중인 문장 인덱스
+    currentIndex: 0,                   // 현재 학습 중인 문장 인덱스 (현재 데이터셋 기준)
     revealed: false,                   // 번역 및 설명 노출 상태
+    mode: "all",                       // 학습 모드: "all" | "starred"
     starred: [],                       // 즐겨찾기(별표) 문장 ID 리스트
+    progress: {},                      // 파일별 마지막 학습 위치 { fileId: index }
     settings: {
       theme: "dark",
       fontSize: "md",
@@ -17,12 +20,19 @@ document.addEventListener("DOMContentLoaded", () => {
       autoPlay: false,
       alwaysShowTranslation: true
     },
-    // 사용자 추가 파일 리스트 { id: { title, data: [...] } }
+    // 사용자 추가 파일 메모리 캐시 { id: { title, data:[...], createdAt, updatedAt } }
+    // 진실 원본(source of truth)은 IndexedDB (미지원 시 localStorage 폴백)
     customFiles: {}
   };
 
   // ── TTS 지원 음성 리스트 캐시 ──
   let availableVoices = [];
+
+  // ── 렌더 가드 토큰 (빠른 연속 내비게이션 시 stale 렌더 방지) ──
+  let renderToken = 0;
+
+  // ── 현재 카드에 표시된 문장 (이벤트 위임 핸들러에서 참조) ──
+  let currentSentence = null;
 
   // ── DOM 엘리먼트 참조 ──
   const body = document.body;
@@ -30,7 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const cardContainer = document.getElementById("card-container");
   const fileSelect = document.getElementById("file-select");
   const fileListDashboard = document.getElementById("file-list-dashboard");
-  
+
   // 헤더 버튼
   const settingsBtn = document.getElementById("settings-btn");
   const closeSettingsBtn = document.getElementById("close-settings-btn");
@@ -43,6 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const bookmarkBtn = document.getElementById("bookmark-btn");
   const progressBar = document.getElementById("progress-bar");
   const progressText = document.getElementById("progress-text");
+  const modeOpts = document.querySelectorAll(".mode-opt");
 
   // 설정 컨트롤들
   const themeOpts = document.querySelectorAll(".theme-opt");
@@ -66,29 +77,222 @@ document.addEventListener("DOMContentLoaded", () => {
   const dictNaver = document.getElementById("dict-naver");
   const dictCambridge = document.getElementById("dict-cambridge");
 
+  // ── 보안: HTML 이스케이프 헬퍼 (작은따옴표는 의도적으로 보존: 영어 축약형 표시용) ──
+  function escapeHtml(str) {
+    if (str == null) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  // ── 보안: 신뢰할 수 없는 노트 텍스트에 대해 허용 태그(strong/em/br)만 통과 ──
+  function sanitizeRichText(str) {
+    if (str == null) return "";
+    let safe = escapeHtml(str);
+    safe = safe.replace(/&lt;(\/?(?:strong|em|br))\s*\/?&gt;/gi, (m, tag) => `<${tag}>`);
+    return safe;
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // IndexedDB 저장소 래퍼 (커스텀 파일 본문 저장)
+  // ───────────────────────────────────────────────────────────
+  const FilesDB = (() => {
+    const DB_NAME = "yh_db";
+    const STORE = "files";
+    const VERSION = 1;
+    const supported = (typeof indexedDB !== "undefined" && indexedDB !== null);
+    let dbPromise = null;
+
+    function open() {
+      if (!supported) return Promise.reject(new Error("IndexedDB 미지원"));
+      if (dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, VERSION);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) {
+            db.createObjectStore(STORE, { keyPath: "id" });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      return dbPromise;
+    }
+
+    async function listFiles() {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readonly");
+        const rq = tx.objectStore(STORE).getAll();
+        rq.onsuccess = () => resolve(rq.result || []);
+        rq.onerror = () => reject(rq.error);
+      });
+    }
+
+    async function putFile(obj) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).put(obj);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    }
+
+    async function deleteFile(id) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    return { supported, listFiles, putFile, deleteFile };
+  })();
+
+  // ── 커스텀 파일 로드/저장/삭제 (IndexedDB 우선, localStorage 폴백) ──
+  async function loadCustomFiles() {
+    if (FilesDB.supported) {
+      try {
+        const arr = await FilesDB.listFiles();
+        const map = {};
+        arr.forEach(f => {
+          map[f.id] = { title: f.title, data: f.data, createdAt: f.createdAt, updatedAt: f.updatedAt };
+        });
+        return map;
+      } catch (e) {
+        console.error("IndexedDB 파일 로드 실패, localStorage 폴백:", e);
+      }
+    }
+    try {
+      const saved = localStorage.getItem("yh_customFiles");
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("커스텀 파일 로드 실패:", e);
+      return {};
+    }
+  }
+
+  async function saveCustomFile(id, fileObj) {
+    if (FilesDB.supported) {
+      try {
+        await FilesDB.putFile({ id, ...fileObj });
+        return true;
+      } catch (e) {
+        console.error("IndexedDB 저장 실패:", e);
+        alert("저장에 실패했습니다. 저장 공간이 부족하거나 브라우저 제한일 수 있습니다.");
+        return false;
+      }
+    }
+    // 폴백: 전체 맵을 localStorage에 직렬화
+    try {
+      localStorage.setItem("yh_customFiles", JSON.stringify(state.customFiles));
+      return true;
+    } catch (e) {
+      console.error("localStorage 저장 실패:", e);
+      alert("저장 공간이 부족합니다. 기존 파일을 삭제한 뒤 다시 시도해 주세요.");
+      return false;
+    }
+  }
+
+  async function removeCustomFile(id) {
+    if (FilesDB.supported) {
+      try { await FilesDB.deleteFile(id); } catch (e) { console.error("IndexedDB 삭제 실패:", e); }
+      return;
+    }
+    try { localStorage.setItem("yh_customFiles", JSON.stringify(state.customFiles)); } catch (e) { console.error(e); }
+  }
+
+  // ── v2 마이그레이션: 기존 localStorage 데이터 이전 (1회성, 비파괴적) ──
+  async function migrateV2() {
+    try {
+      if (localStorage.getItem("yh_migrated_v2") === "true") return;
+
+      // (a) 커스텀 파일: localStorage → IndexedDB (지원 시에만 이전, 미지원이면 보존)
+      const legacy = localStorage.getItem("yh_customFiles");
+      if (legacy && FilesDB.supported) {
+        const obj = JSON.parse(legacy);
+        for (const id of Object.keys(obj)) {
+          const f = obj[id];
+          await FilesDB.putFile({
+            id,
+            title: f.title,
+            data: f.data,
+            createdAt: f.createdAt || Date.now(),
+            updatedAt: f.updatedAt || Date.now()
+          });
+        }
+        localStorage.removeItem("yh_customFiles");
+      }
+
+      // (b) 진도: 단일 yh_currentIndex → yh_progress 맵
+      if (!localStorage.getItem("yh_progress")) {
+        const oldIdx = parseInt(localStorage.getItem("yh_currentIndex")) || 0;
+        const curFile = localStorage.getItem("yh_currentFileId") || "default_interview";
+        const prog = {};
+        prog[curFile] = oldIdx;
+        localStorage.setItem("yh_progress", JSON.stringify(prog));
+      }
+      localStorage.removeItem("yh_currentIndex");
+
+      localStorage.setItem("yh_migrated_v2", "true");
+    } catch (e) {
+      console.error("v2 마이그레이션 실패(기존 데이터 보존):", e);
+    }
+  }
+
   // ── 초기화 (Initialization) ──
-  function init() {
+  async function init() {
+    await migrateV2();
     loadStateFromStorage();
+    state.customFiles = await loadCustomFiles();
+
+    // 현재 파일의 진도로 인덱스 복원 (복습 모드는 진도 비저장)
+    if (state.mode === "all") {
+      state.currentIndex = (state.progress[state.currentFileId] != null) ? state.progress[state.currentFileId] : 0;
+    } else {
+      state.currentIndex = 0;
+    }
+
     setupTheme(state.settings.theme);
     setupFontSize(state.settings.fontSize);
-    
-    // 항상 노출 토글 UI 상태 연동
+    syncModeUI();
+
     if (alwaysShowToggle) {
       alwaysShowToggle.checked = state.settings.alwaysShowTranslation;
     }
+    if (autoPlayToggle) {
+      autoPlayToggle.checked = state.settings.autoPlay;
+    }
+    if (ttsSpeedSlider) {
+      ttsSpeedSlider.value = state.settings.ttsSpeed;
+      ttsSpeedVal.textContent = `${Number(state.settings.ttsSpeed).toFixed(2)}x`;
+    }
 
-    // TTS 목소리 세팅
     setupTTSVoices();
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+    if (typeof speechSynthesis !== "undefined" && window.speechSynthesis.onvoiceschanged !== undefined) {
       window.speechSynthesis.onvoiceschanged = setupTTSVoices;
     }
 
-    // 파일 셀렉트 목록 채우기 및 렌더링
     populateFileDropdown();
     renderCurrentSentence();
-
-    // 이벤트 리스너 바인딩
     bindEvents();
+    registerServiceWorker();
+  }
+
+  // ── 서비스워커 등록 (PWA, file:// 환경에서는 비활성) ──
+  function registerServiceWorker() {
+    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+      navigator.serviceWorker.register("service-worker.js").catch(e => {
+        console.warn("서비스워커 등록 실패:", e);
+      });
+    }
   }
 
   // ── 로컬 스토리지 데이터 로드 및 저장 ──
@@ -101,10 +305,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedAutoPlay = localStorage.getItem("yh_autoPlay") === "true";
       const savedAlwaysShow = localStorage.getItem("yh_alwaysShow") !== "false"; // 기본값 true
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
-      const savedCurrentIndex = parseInt(localStorage.getItem("yh_currentIndex")) || 0;
-      
+      const savedMode = localStorage.getItem("yh_mode") === "starred" ? "starred" : "all";
+
       const savedStarred = localStorage.getItem("yh_starred");
-      const savedCustomFiles = localStorage.getItem("yh_customFiles");
+      const savedProgress = localStorage.getItem("yh_progress");
 
       state.settings = {
         theme: savedTheme,
@@ -114,75 +318,81 @@ document.addEventListener("DOMContentLoaded", () => {
         autoPlay: savedAutoPlay,
         alwaysShowTranslation: savedAlwaysShow
       };
-      
+
       state.currentFileId = savedCurrentFile;
-      state.currentIndex = savedCurrentIndex;
+      state.mode = savedMode;
       state.starred = savedStarred ? JSON.parse(savedStarred) : [];
-      state.customFiles = savedCustomFiles ? JSON.parse(savedCustomFiles) : {};
+      state.progress = savedProgress ? JSON.parse(savedProgress) : {};
     } catch (e) {
       console.error("로컬 스토리지 로드 중 오류 발생:", e);
     }
   }
 
   function saveSettingsToStorage() {
-    localStorage.setItem("yh_theme", state.settings.theme);
-    localStorage.setItem("yh_fontSize", state.settings.fontSize);
-    localStorage.setItem("yh_ttsSpeed", state.settings.ttsSpeed);
-    localStorage.setItem("yh_ttsVoice", state.settings.ttsVoice);
-    localStorage.setItem("yh_autoPlay", state.settings.autoPlay);
-    localStorage.setItem("yh_alwaysShow", state.settings.alwaysShowTranslation);
+    try {
+      localStorage.setItem("yh_theme", state.settings.theme);
+      localStorage.setItem("yh_fontSize", state.settings.fontSize);
+      localStorage.setItem("yh_ttsSpeed", state.settings.ttsSpeed);
+      localStorage.setItem("yh_ttsVoice", state.settings.ttsVoice);
+      localStorage.setItem("yh_autoPlay", state.settings.autoPlay);
+      localStorage.setItem("yh_alwaysShow", state.settings.alwaysShowTranslation);
+    } catch (e) {
+      console.error("설정 저장 실패:", e);
+    }
   }
 
   function saveStateToStorage() {
-    localStorage.setItem("yh_currentFileId", state.currentFileId);
-    localStorage.setItem("yh_currentIndex", state.currentIndex);
-    localStorage.setItem("yh_starred", JSON.stringify(state.starred));
-    localStorage.setItem("yh_customFiles", JSON.stringify(state.customFiles));
+    try {
+      localStorage.setItem("yh_currentFileId", state.currentFileId);
+      localStorage.setItem("yh_mode", state.mode);
+      localStorage.setItem("yh_starred", JSON.stringify(state.starred));
+      localStorage.setItem("yh_progress", JSON.stringify(state.progress));
+    } catch (e) {
+      console.error("상태 저장 실패:", e);
+    }
+  }
+
+  // 현재 파일의 진도 갱신 (전체 모드에서만 영속화)
+  function saveProgress() {
+    if (state.mode === "all") {
+      state.progress[state.currentFileId] = state.currentIndex;
+    }
+    saveStateToStorage();
   }
 
   // ── 테마 및 폰트 변경 처리 ──
   function setupTheme(theme) {
     state.settings.theme = theme;
     document.documentElement.setAttribute("data-theme", theme);
-    
-    // UI 동기화
     themeOpts.forEach(opt => {
-      if (opt.dataset.theme === theme) {
-        opt.classList.add("active");
-      } else {
-        opt.classList.remove("active");
-      }
+      opt.classList.toggle("active", opt.dataset.theme === theme);
     });
     saveSettingsToStorage();
   }
 
   function setupFontSize(size) {
     state.settings.fontSize = size;
-    
-    // 폰트 클래스 교체
     body.classList.remove("font-sm", "font-md", "font-lg", "font-xl");
     body.classList.add(`font-${size}`);
 
-    // 슬라이더 동기화
     const sizeMap = { "sm": 0, "md": 1, "lg": 2, "xl": 3 };
     fontSizeSlider.value = sizeMap[size];
-    
+
     const displayMap = { "sm": "작게", "md": "보통", "lg": "크게", "xl": "아주 크게" };
     fontSizeVal.textContent = displayMap[size];
-    
+
     saveSettingsToStorage();
   }
 
   // ── TTS 목소리 목록 구성 ──
   function setupTTSVoices() {
     if (typeof speechSynthesis === "undefined") return;
-    
+
     availableVoices = window.speechSynthesis.getVoices();
     voiceSelect.innerHTML = "";
 
-    // 영어(en) 관련 목소리 필터링
-    const enVoices = availableVoices.filter(v => v.lang.startsWith("en-"));
-    
+    const enVoices = availableVoices.filter(v => v.lang && v.lang.startsWith("en-"));
+
     if (enVoices.length === 0) {
       const option = document.createElement("option");
       option.value = "";
@@ -194,16 +404,13 @@ document.addEventListener("DOMContentLoaded", () => {
     enVoices.forEach(voice => {
       const option = document.createElement("option");
       option.value = voice.name;
-      // 보기 편하게 가공 (e.g. Google US English (en-US))
       option.textContent = `${voice.name} (${voice.lang})`;
-      
       if (voice.name === state.settings.ttsVoice) {
         option.selected = true;
       }
       voiceSelect.appendChild(option);
     });
 
-    // 선택된 목소리가 없으면 첫 번째 영어 목소리로 세팅
     if (!state.settings.ttsVoice && enVoices.length > 0) {
       state.settings.ttsVoice = enVoices[0].name;
       saveSettingsToStorage();
@@ -212,17 +419,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── 파일 선택 드롭다운 및 대시보드 채우기 ──
   function populateFileDropdown() {
-    // 1. 헤더 드롭다운 동기화
     fileSelect.innerHTML = "";
-    
-    // 기본 파일 옵션 추가
+
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "default_interview";
     defaultOpt.textContent = "Elon & Sunak 인터뷰";
     if (state.currentFileId === "default_interview") defaultOpt.selected = true;
     fileSelect.appendChild(defaultOpt);
 
-    // 커스텀 파일 옵션 추가
     Object.keys(state.customFiles).forEach(id => {
       const opt = document.createElement("option");
       opt.value = id;
@@ -231,63 +435,52 @@ document.addEventListener("DOMContentLoaded", () => {
       fileSelect.appendChild(opt);
     });
 
-    // 2. 설정창 내부 파일 대시보드 동기화
     if (!fileListDashboard) return;
     fileListDashboard.innerHTML = "";
 
-    // A. 기본 파일 카드 렌더링
+    // A. 기본 파일 카드
     const defaultIsActive = state.currentFileId === "default_interview";
     const defaultCard = document.createElement("div");
     defaultCard.className = `file-item-card ${defaultIsActive ? "active" : ""}`;
     defaultCard.innerHTML = `
       <div class="file-item-info">
-        <div class="file-item-title">Elon & Sunak 인터뷰</div>
+        <div class="file-item-title">Elon &amp; Sunak 인터뷰</div>
         <div class="file-item-meta">
           <span class="file-item-badge">기본</span>
-          <span>28 문장</span>
+          <span>${DEFAULT_STUDY_DATA.length} 문장</span>
         </div>
       </div>
     `;
     defaultCard.addEventListener("click", () => {
-      if (state.currentFileId !== "default_interview") {
-        selectFile("default_interview");
-      }
+      if (state.currentFileId !== "default_interview") selectFile("default_interview");
     });
     fileListDashboard.appendChild(defaultCard);
 
-    // B. 사용자 커스텀 파일 카드 렌더링
+    // B. 사용자 커스텀 파일 카드
     Object.keys(state.customFiles).forEach(id => {
       const fileData = state.customFiles[id];
       const isActive = state.currentFileId === id;
+      const safeTitle = escapeHtml(fileData.title);
       const card = document.createElement("div");
       card.className = `file-item-card ${isActive ? "active" : ""}`;
       card.innerHTML = `
         <div class="file-item-info">
-          <div class="file-item-title" title="${fileData.title}">${fileData.title}</div>
+          <div class="file-item-title" title="${safeTitle}">${safeTitle}</div>
           <div class="file-item-meta">
             <span class="file-item-badge">사용자</span>
             <span>${fileData.data.length} 문장</span>
           </div>
         </div>
-        <button class="file-delete-btn" title="파일 삭제" aria-label="파일 삭제">
-          🗑️
-        </button>
+        <button class="file-delete-btn" title="파일 삭제" aria-label="파일 삭제">🗑️</button>
       `;
-      
-      // 카드 클릭 이벤트 (파일 활성화)
       card.addEventListener("click", () => {
-        if (state.currentFileId !== id) {
-          selectFile(id);
-        }
+        if (state.currentFileId !== id) selectFile(id);
       });
-
-      // 삭제 버튼 클릭 이벤트
       const deleteBtn = card.querySelector(".file-delete-btn");
       deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation(); // 카드 클릭으로 전파되는 것 방지
+        e.stopPropagation();
         deleteCustomFile(id);
       });
-
       fileListDashboard.appendChild(card);
     });
   }
@@ -295,67 +488,122 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── 파일 선택 처리 ──
   function selectFile(fileId) {
     state.currentFileId = fileId;
-    state.currentIndex = 0;
-    
-    // UI 전체 동기화 및 학습 화면 갱신
+    state.mode = "all";
+    syncModeUI();
+    state.currentIndex = (state.progress[fileId] != null) ? state.progress[fileId] : 0;
+
+    saveStateToStorage();
     populateFileDropdown();
     renderCurrentSentence();
-    
-    // 헤더 드롭다운 값도 강제 동기화
     fileSelect.value = fileId;
   }
 
   // ── 커스텀 파일 삭제 처리 ──
-  function deleteCustomFile(fileId) {
+  async function deleteCustomFile(fileId) {
     const fileTitle = state.customFiles[fileId] ? state.customFiles[fileId].title : "해당 파일";
     if (!confirm(`'${fileTitle}' 파일을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 학습 진도도 함께 삭제됩니다.`)) {
       return;
     }
 
-    // 데이터 삭제
     delete state.customFiles[fileId];
-    saveStateToStorage();
+    delete state.progress[fileId];
+    await removeCustomFile(fileId);
 
-    // 만약 현재 공부하던 파일이 삭제된 파일이면 기본 인터뷰로 강제 변경
     if (state.currentFileId === fileId) {
       state.currentFileId = "default_interview";
-      state.currentIndex = 0;
-      saveStateToStorage();
+      state.mode = "all";
+      syncModeUI();
+      state.currentIndex = (state.progress["default_interview"] != null) ? state.progress["default_interview"] : 0;
     }
 
-    // UI 동기화
+    saveStateToStorage();
     populateFileDropdown();
     renderCurrentSentence();
-    
     alert("파일이 안전하게 삭제되었습니다.");
   }
 
-  // ── 현재 영어 문장 학습용 데이터 추출 ──
-  function getCurrentDataset() {
-    if (state.currentFileId === "default_interview") {
-      return DEFAULT_STUDY_DATA;
-    }
+  // ── 데이터셋 추출 ──
+  function getFullDataset() {
+    if (state.currentFileId === "default_interview") return DEFAULT_STUDY_DATA;
     const custom = state.customFiles[state.currentFileId];
     return custom ? custom.data : DEFAULT_STUDY_DATA;
   }
 
+  function getCurrentDataset() {
+    const full = getFullDataset();
+    if (state.mode === "starred") {
+      return full.filter(d => state.starred.includes(d.id));
+    }
+    return full;
+  }
+
+  // 기본 교재만 노트의 리치 마크업을 신뢰. 사용자 임포트는 새니타이즈.
+  function isTrustedFile() {
+    return state.currentFileId === "default_interview";
+  }
+
+  // ── 학습 모드 토글 ──
+  function syncModeUI() {
+    modeOpts.forEach(o => o.classList.toggle("active", o.dataset.mode === state.mode));
+  }
+
+  function setMode(mode) {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    if (mode === "all") {
+      state.currentIndex = (state.progress[state.currentFileId] != null) ? state.progress[state.currentFileId] : 0;
+    } else {
+      state.currentIndex = 0;
+    }
+    syncModeUI();
+    saveStateToStorage();
+    renderCurrentSentence();
+  }
+
+  // ── 빈 상태(복습 모드인데 별표 0개) 렌더 ──
+  function renderEmptyState() {
+    const myToken = ++renderToken;
+    cardElement.classList.remove("fade-in");
+    cardElement.classList.add("fade-out");
+    setTimeout(() => {
+      if (myToken !== renderToken) return;
+      cardElement.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-emoji">★</div>
+          <h3>즐겨찾기한 문장이 없습니다</h3>
+          <p>학습 중 별표(★) 버튼을 눌러 문장을 즐겨찾기에 추가한 뒤,<br>이곳에서 모아 복습할 수 있어요.</p>
+          <button class="reveal-trigger" id="empty-back-btn">전체 학습으로 돌아가기</button>
+        </div>
+      `;
+      cardElement.classList.remove("fade-out");
+      cardElement.classList.add("fade-in");
+    }, 150);
+  }
+
   // ── 메인 카드 렌더링 ──
   function renderCurrentSentence() {
-    // 새 문장 진입 시 진행 중이던 TTS 오디오 즉시 전면 중단
     if (typeof speechSynthesis !== "undefined") {
       window.speechSynthesis.cancel();
     }
 
     const dataset = getCurrentDataset();
-    
-    // 만약 현재 인덱스가 범위를 벗어나면 복구
+
+    // 복습 모드 빈 상태 처리
+    if (dataset.length === 0) {
+      currentSentence = null;
+      updateBookmarkUI(null);
+      updateProgressUI(0);
+      renderEmptyState();
+      return;
+    }
+
     if (state.currentIndex < 0) state.currentIndex = 0;
     if (state.currentIndex >= dataset.length) state.currentIndex = Math.max(0, dataset.length - 1);
 
     const data = dataset[state.currentIndex];
     if (!data) return;
+    currentSentence = data;
 
-    // 번역 및 설명 가림막 초기화 (항상 노출 설정에 따른 분기)
     if (state.settings.alwaysShowTranslation) {
       state.revealed = true;
       cardElement.classList.add("revealed");
@@ -364,102 +612,69 @@ document.addEventListener("DOMContentLoaded", () => {
       cardElement.classList.remove("revealed");
     }
 
-    // 별표 상태 표시
     updateBookmarkUI(data.id);
-
-    // 진행률 업데이트
     updateProgressUI(dataset.length);
 
-    // 카드 내용 빌드
+    const trusted = isTrustedFile();
     const cardContentHTML = `
       <div class="card-header-info">
-        <span class="speaker-tag">${data.speaker || "SPEAKER"}</span>
+        <span class="speaker-tag">${escapeHtml(data.speaker || "SPEAKER")}</span>
         <span>SENTENCE ${state.currentIndex + 1}/${dataset.length}</span>
       </div>
-      
-      <!-- [1구역: 영어 문장] -->
+
       <div class="en-section">
         <div class="sentence-en-container">
           <div class="sentence-en" id="sentence-en-text">
             ${makeWordsClickable(data.en)}
           </div>
-          <button class="speak-btn" id="card-speak-btn" aria-label="문장 듣기">
-            🔊
-          </button>
+          <button class="speak-btn" id="card-speak-btn" aria-label="문장 듣기">🔊</button>
         </div>
       </div>
 
-      <!-- [번역 보기 트리거 버튼] -->
       <button class="reveal-trigger" id="reveal-trigger-btn">
         🔍 번역 및 학습 포인트 보기 (Space)
       </button>
 
-      <!-- [드러나는 구역] -->
       <div class="revealed-content">
         <div class="divider"></div>
-        
-        <!-- [2구역: 한글 번역문] -->
         <div class="ko-section">
-          <div class="sentence-ko">${data.ko}</div>
+          <div class="sentence-ko">${escapeHtml(data.ko)}</div>
         </div>
-
-        <!-- [3구역: 상세 설명 (단어, 문법, 숙어, 패턴)] -->
         <div class="notes-section">
-          ${renderNotesSection(data.notes, data.en)}
+          ${renderNotesSection(data.notes, trusted)}
         </div>
       </div>
     `;
 
-    // 부드러운 전환 효과를 위한 클래스 교체
+    const myToken = ++renderToken;
     cardElement.classList.remove("fade-in");
     cardElement.classList.add("fade-out");
 
     setTimeout(() => {
+      if (myToken !== renderToken) return; // stale 렌더 가드
       cardElement.innerHTML = cardContentHTML;
       cardElement.classList.remove("fade-out");
       cardElement.classList.add("fade-in");
-
-      // 카드 내 버튼 이벤트 동적 바인딩
-      document.getElementById("reveal-trigger-btn").addEventListener("click", revealTranslation);
-      document.getElementById("card-speak-btn").addEventListener("click", () => speak(data.en));
-      
-      // 단어 클릭 바인딩
-      const wordSpans = cardElement.querySelectorAll(".word-span");
-      wordSpans.forEach(span => {
-        span.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showWordPopup(span.dataset.word);
-        });
-      });
-
-      // 자동 재생 연동
-      if (state.settings.autoPlay) {
-        speak(data.en);
-      }
+      if (state.settings.autoPlay) speak(data.en);
     }, 150);
 
-    saveStateToStorage();
+    saveProgress();
   }
 
-  // ── 영어 문장의 개별 단어를 클릭 가능하도록 랩핑 ──
+  // ── 영어 문장의 개별 단어를 클릭 가능하도록 랩핑 (이스케이프 후 처리) ──
   function makeWordsClickable(sentence) {
-    // HTML 태그가 이미 포함되어 있을 수 있으므로 텍스트만 분해하도록 주의
-    // 여기서는 영단어(A-Za-z)와 아포스트로피('), 붙임표(-)를 식별하여 wrap
+    const safe = escapeHtml(sentence);
     const wordRegex = /([A-Za-z'-]+)/g;
-    
-    // 단순하게 텍스트 공백으로 잘라 태그 제외하고 치환
-    return sentence.replace(wordRegex, (match) => {
-      // 쉼표나 마침표 등의 문장부호는 바깥으로 빠지도록 설계
+    return safe.replace(wordRegex, (match) => {
       const cleanWord = match.replace(/[^A-Za-z]/g, "").toLowerCase();
       if (cleanWord.length === 0) return match;
-      return `<span class="word-span" data-word="${cleanWord}">${match}</span>`;
+      return `<span class="word-span" role="button" tabindex="0" data-word="${escapeHtml(cleanWord)}">${match}</span>`;
     });
   }
 
   // ── 상세 설명(Notes) 영역 HTML 생성 ──
-  function renderNotesSection(notes, rawEn) {
+  function renderNotesSection(notes, trusted) {
     if (!notes) {
-      // 만약 외부 파일이라 설명이 없으면 자동 생성된 사전 검색 도구 제공
       return `
         <h3>💡 Vocabulary Tool</h3>
         <p style="color: var(--text-secondary); margin-bottom: 10px;">
@@ -468,65 +683,50 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     }
 
+    const rich = (s) => trusted ? s : sanitizeRichText(s);
     let html = "";
 
-    // 1. 단어 목록
     if (notes.words && notes.words.length > 0) {
       html += `
         <h3>📌 Key Vocabulary</h3>
         <div class="words-list">
           ${notes.words.map(w => `
             <div class="word-item">
-              <span class="word-name">${w.word}</span>
-              <span class="word-meaning">${w.meaning}</span>
-              <a href="#" class="dict-link" data-word="${w.word.toLowerCase()}">사전 🔍</a>
+              <span class="word-name">${escapeHtml(w.word)}</span>
+              <span class="word-meaning">${escapeHtml(w.meaning)}</span>
+              <a href="#" class="dict-link" data-word="${escapeHtml(String(w.word || "").toLowerCase())}">사전 🔍</a>
             </div>
           `).join("")}
         </div>
       `;
     }
 
-    // 2. 직독직해 & 구조
     if (notes.structure) {
       html += `
         <h3>💡 Sentence Structure</h3>
         <div class="grammar-notes" style="border-top: none; padding-top: 0; margin-top: 0; margin-bottom: 12px;">
-          ${notes.structure}
+          ${rich(notes.structure)}
         </div>
       `;
     }
 
-    // 3. 필수 암기 문법/숙어
     if (notes.mustMemorize) {
       html += `
         <h3>🔥 Must Memorize</h3>
         <div class="idiom-notes" style="border-top: none; padding-top: 0; margin-top: 0; margin-bottom: 12px;">
-          ${notes.mustMemorize}
+          ${rich(notes.mustMemorize)}
         </div>
       `;
     }
 
-    // 4. 회화 응용 패턴
     if (notes.pattern) {
       html += `
         <h3>🔄 Speaking Pattern Hint</h3>
         <div class="idiom-notes" style="border-top: none; padding-top: 0; margin-top: 0;">
-          ${notes.pattern}
+          ${rich(notes.pattern)}
         </div>
       `;
     }
-
-    // 사전 링크 동적 바인딩을 위한 후처리 지원
-    setTimeout(() => {
-      const dictLinks = cardElement.querySelectorAll(".dict-link");
-      dictLinks.forEach(link => {
-        link.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          showWordPopup(link.dataset.word);
-        });
-      });
-    }, 200);
 
     return html || "<p style='color: var(--text-muted)'>상세 설명 정보가 없습니다.</p>";
   }
@@ -537,7 +737,7 @@ document.addEventListener("DOMContentLoaded", () => {
     cardElement.classList.add("revealed");
   }
 
-  // ── 별표/즐겨찾기 상태 ──
+  // ── 별표/즐겨찾기 ──
   function toggleBookmark() {
     const dataset = getCurrentDataset();
     const data = dataset[state.currentIndex];
@@ -546,52 +746,51 @@ document.addEventListener("DOMContentLoaded", () => {
     const idx = state.starred.indexOf(data.id);
     if (idx === -1) {
       state.starred.push(data.id);
-      bookmarkBtn.classList.add("active");
     } else {
       state.starred.splice(idx, 1);
-      bookmarkBtn.classList.remove("active");
     }
+    updateBookmarkUI(data.id);
     saveStateToStorage();
+
+    // 복습 모드에서 별표 해제 시 목록이 줄어드므로 즉시 갱신
+    if (state.mode === "starred") {
+      renderCurrentSentence();
+    }
   }
 
   function updateBookmarkUI(sentenceId) {
-    if (state.starred.includes(sentenceId)) {
-      bookmarkBtn.classList.add("active");
-    } else {
-      bookmarkBtn.classList.remove("active");
-    }
+    const isOn = sentenceId != null && state.starred.includes(sentenceId);
+    bookmarkBtn.classList.toggle("active", isOn);
+    bookmarkBtn.disabled = (sentenceId == null);
   }
 
-  // ── 진행바 및 제어 버튼 비활성화 UI ──
+  // ── 진행바 및 제어 버튼 ──
   function updateProgressUI(totalCount) {
     const pct = totalCount > 0 ? ((state.currentIndex + 1) / totalCount) * 100 : 0;
     progressBar.style.width = `${pct}%`;
-    progressText.textContent = `${state.currentIndex + 1} / ${totalCount} (${Math.round(pct)}%)`;
+    progressText.textContent = totalCount > 0
+      ? `${state.currentIndex + 1} / ${totalCount} (${Math.round(pct)}%)`
+      : `0 / 0 (0%)`;
 
-    // 경계 비활성화
-    prevBtn.disabled = state.currentIndex === 0;
-    nextBtn.disabled = state.currentIndex === totalCount - 1;
+    prevBtn.disabled = totalCount === 0 || state.currentIndex === 0;
+    nextBtn.disabled = totalCount === 0 || state.currentIndex === totalCount - 1;
   }
 
   // ── TTS 음성 합성 발음 (Web Speech API) ──
   function speak(text) {
     if (typeof speechSynthesis === "undefined") return;
 
-    // 만약 이미 재생 중(speaking) 상태라면 재생을 멈추고 🔊 상태로 복귀
     if (window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
       setSpeakButtonActive(false);
       return;
     }
 
-    // 단어 기호 정제 (HTML 태그 제거)
     const cleanText = text.replace(/<\/?[^>]+(>|$)/g, "");
-
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = "en-US";
     utterance.rate = state.settings.ttsSpeed;
 
-    // 설정된 보이스 매칭
     if (state.settings.ttsVoice) {
       const selectedVoice = availableVoices.find(v => v.name === state.settings.ttsVoice);
       if (selectedVoice) {
@@ -600,44 +799,30 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // 재생 시작 시 버튼 아이콘 ⏹️ 로 변경 및 애니메이션 클래스 주입
-    utterance.onstart = () => {
-      setSpeakButtonActive(true);
-    };
-
-    // 재생 완료 시 다시 🔊 로 복원
-    utterance.onend = () => {
-      setSpeakButtonActive(false);
-    };
-
-    // 오류 발생 시 다시 🔊 로 복원
-    utterance.onerror = () => {
-      setSpeakButtonActive(false);
-    };
+    utterance.onstart = () => setSpeakButtonActive(true);
+    utterance.onend = () => setSpeakButtonActive(false);
+    utterance.onerror = () => setSpeakButtonActive(false);
 
     window.speechSynthesis.speak(utterance);
   }
 
-  // 재생 버튼의 아이콘 및 활성화 상태(speaking 클래스) 제어 헬퍼 함수
   function setSpeakButtonActive(active) {
     const speakBtn = document.getElementById("card-speak-btn");
-    if (speakBtn) {
-      if (active) {
-        speakBtn.innerHTML = "⏹️";
-        speakBtn.classList.add("speaking");
-        speakBtn.setAttribute("aria-label", "음성 중단");
-      } else {
-        speakBtn.innerHTML = "🔊";
-        speakBtn.classList.remove("speaking");
-        speakBtn.setAttribute("aria-label", "문장 듣기");
-      }
+    if (!speakBtn) return;
+    if (active) {
+      speakBtn.innerHTML = "⏹️";
+      speakBtn.classList.add("speaking");
+      speakBtn.setAttribute("aria-label", "음성 중단");
+    } else {
+      speakBtn.innerHTML = "🔊";
+      speakBtn.classList.remove("speaking");
+      speakBtn.setAttribute("aria-label", "문장 듣기");
     }
   }
 
   // ── 이전/다음 문장 내비게이션 ──
   function navigate(direction) {
     const dataset = getCurrentDataset();
-    
     if (direction === "prev" && state.currentIndex > 0) {
       state.currentIndex--;
       renderCurrentSentence();
@@ -649,20 +834,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── 단어 사전 검색 미니 팝업 ──
   function showWordPopup(word) {
-    const cleanWord = word.replace(/[^A-Za-z]/g, "").toLowerCase();
+    const cleanWord = String(word || "").replace(/[^A-Za-z]/g, "").toLowerCase();
+    if (!cleanWord) return;
     popupWord.textContent = cleanWord;
-    
-    // 네이버 및 캠브리지 사전 주소 주입
-    dictNaver.href = `https://en.dict.naver.com/#/search?query=${cleanWord}`;
-    dictCambridge.href = `https://dictionary.cambridge.org/dictionary/english/${cleanWord}`;
-    
+    dictNaver.href = `https://en.dict.naver.com/#/search?query=${encodeURIComponent(cleanWord)}`;
+    dictCambridge.href = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(cleanWord)}`;
     wordPopup.classList.add("active");
     dimOverlay.classList.add("active");
   }
 
   function hideWordPopup() {
     wordPopup.classList.remove("active");
-    // 설정 패널이 닫혀 있으면 딤오버레이도 비활성화
     if (!settingsPanel.classList.contains("active")) {
       dimOverlay.classList.remove("active");
     }
@@ -676,76 +858,60 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function closeSettings() {
     settingsPanel.classList.remove("active");
-    // 단어 팝업창도 닫혀있으면 딤오버레이 완전 종료
     if (!wordPopup.classList.contains("active")) {
       dimOverlay.classList.remove("active");
     }
   }
 
-  // ── 외부 학습용 영어 파일 파서 및 임포트 ──
-  
-  // 1. HTML 파일 파서 (elon_sunak_interview.html 형식 자동 매핑)
+  // ───────────────────────────────────────────────────────────
+  // 외부 학습용 영어 파일 파서
+  // ───────────────────────────────────────────────────────────
+
+  // 1. HTML 파서 (data-speaker 우선, 없으면 번갈아 폴백)
   function parseHtmlTranscript(htmlText, fileName) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, "text/html");
-    
-    // dialogue-block들을 수집
     const blocks = doc.querySelectorAll(".dialogue-block");
     const parsedData = [];
 
-    let currentSpeaker = "SPEAKER";
     let lastEnText = "";
+    let pendingSpeaker = "";
 
-    // elon_sunak_interview.html 구조:
-    // EN 블록이 오고 다음 블록으로 KO 블록이 배치되는 규칙성 파싱
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
       const enTextEl = block.querySelector(".en-text");
       const koTextEl = block.querySelector(".ko-text");
-      
-      const badge = block.querySelector(".lang-badge");
-      let rawSpeaker = "SPEAKER";
-      
-      // 대화 블록 직전 또는 내부의 클래스 속성에서 화자 파악 시도
-      // (예: Sunak, Musk 또는 뱃지 명칭)
-      if (badge) {
-        // 부모의 형제나 타이틀에서 화자를 추측할 수 없으므로 번갈아가며 매핑
-        // Rishi Sunak(sunak_XX), Elon Musk(musk_XX)
-      }
+      const dsAttr = block.getAttribute("data-speaker");
 
       if (enTextEl) {
         lastEnText = enTextEl.textContent.trim();
+        pendingSpeaker = dsAttr ? dsAttr.trim() : "";
       } else if (koTextEl && lastEnText) {
         const cleanKoText = koTextEl.textContent.trim();
-        
-        // 화자 추정 규칙: Rishi Sunak / Elon Musk 홀수/짝수 세팅
-        // (간단하게 EN/KO 페어링을 문장 리스트로 조립)
+        const koSpeaker = dsAttr ? dsAttr.trim() : "";
         const id = `custom_${fileName.replace(/[^a-z0-9]/gi, "_")}_${parsedData.length}`;
-        const speaker = (parsedData.length % 2 === 0) ? "Rishi Sunak" : "Elon Musk";
 
-        parsedData.push({
-          id: id,
-          speaker: speaker,
-          en: lastEnText,
-          ko: cleanKoText,
-          notes: null // 동적으로 dictionary lookup을 하도록 설계
-        });
-        
-        lastEnText = ""; // 리셋
+        // data-speaker 우선 (EN 블록 → KO 블록 순), 없으면 번갈아 추정
+        let speaker = pendingSpeaker || koSpeaker;
+        if (!speaker) {
+          speaker = (parsedData.length % 2 === 0) ? "Rishi Sunak" : "Elon Musk";
+        }
+
+        parsedData.push({ id, speaker, en: lastEnText, ko: cleanKoText, notes: null });
+        lastEnText = "";
+        pendingSpeaker = "";
       }
     }
 
     return parsedData;
   }
 
-  // 2. JSON 파일 파서
+  // 2. JSON 파서
   function parseJsonDataset(jsonText) {
     const raw = JSON.parse(jsonText);
     if (!Array.isArray(raw)) throw new Error("JSON 루트 노드는 배열 객체여야 합니다.");
-    
     return raw.map((item, idx) => {
       if (!item.en || !item.ko) throw new Error(`${idx + 1}번째 문장에 'en' 또는 'ko' 필드가 누락되었습니다.`);
-      
       return {
         id: item.id || `json_${Date.now()}_${idx}`,
         speaker: item.speaker || "Speaker",
@@ -760,12 +926,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function parseRawText(rawText) {
     const lines = rawText.split("\n");
     const parsedData = [];
-    
+
     lines.forEach((line, idx) => {
       const trimmed = line.trim();
       if (!trimmed) return;
 
-      // 구분자 감지: '|' 또는 '::'
       let parts = [];
       if (trimmed.includes("|")) {
         parts = trimmed.split("|");
@@ -777,10 +942,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const en = parts[0].trim();
         const ko = parts[1].trim();
         const noteText = parts[2] ? parts[2].trim() : "";
-        
+
         let parsedNotes = null;
         if (noteText) {
-          // 간이 단어 설명 파싱 (단어=뜻; 단어=뜻)
           const words = [];
           noteText.split(";").forEach(pair => {
             const wParts = pair.split("=");
@@ -808,33 +972,39 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── 새 학습 리스트 저장 및 활성화 ──
-  function loadAndActivateNewDataset(title, data) {
+  async function loadAndActivateNewDataset(title, data) {
     if (!data || data.length === 0) {
       alert("파싱된 문장 데이터가 없습니다. 포맷을 다시 확인해 주세요.");
       return;
     }
 
     const fileId = `file_${Date.now()}`;
-    state.customFiles[fileId] = {
-      title: title,
-      data: data
-    };
+    const now = Date.now();
+    const fileObj = { title, data, createdAt: now, updatedAt: now };
+    state.customFiles[fileId] = { title, data, createdAt: now, updatedAt: now };
+
+    const ok = await saveCustomFile(fileId, fileObj);
+    if (!ok) {
+      delete state.customFiles[fileId]; // 저장 실패 시 롤백
+      return;
+    }
 
     state.currentFileId = fileId;
+    state.mode = "all";
+    syncModeUI();
     state.currentIndex = 0;
+    state.progress[fileId] = 0;
 
-    // 로컬 스토리지 저장 및 UI 리빌드
     saveStateToStorage();
     populateFileDropdown();
     renderCurrentSentence();
-    
+
     alert(`성공! [${title}] 총 ${data.length}개 문장이 정상 업로드되었습니다.`);
     closeSettings();
   }
 
-  // ── 이벤트 핸들러 바인딩 (Events Binding) ──
+  // ── 이벤트 핸들러 바인딩 ──
   function bindEvents() {
-    // 헤더 컨트롤
     settingsBtn.addEventListener("click", openSettings);
     closeSettingsBtn.addEventListener("click", closeSettings);
     dimOverlay.addEventListener("click", () => {
@@ -842,28 +1012,62 @@ document.addEventListener("DOMContentLoaded", () => {
       hideWordPopup();
     });
 
-    // 학습 파일 전환
-    fileSelect.addEventListener("change", (e) => {
-      selectFile(e.target.value);
-    });
+    fileSelect.addEventListener("change", (e) => selectFile(e.target.value));
 
-    // 하단 제어
     prevBtn.addEventListener("click", () => navigate("prev"));
     nextBtn.addEventListener("click", () => navigate("next"));
     bookmarkBtn.addEventListener("click", toggleBookmark);
 
-    // 설정: 테마 선택
-    themeOpts.forEach(opt => {
-      opt.addEventListener("click", () => {
-        setupTheme(opt.dataset.theme);
-      });
+    // 학습 모드 토글
+    modeOpts.forEach(o => o.addEventListener("click", () => setMode(o.dataset.mode)));
+
+    // ── 카드 영역 이벤트 위임 (단어/사전/버튼) ──
+    cardElement.addEventListener("click", (e) => {
+      const wordEl = e.target.closest(".word-span");
+      if (wordEl) {
+        e.stopPropagation();
+        showWordPopup(wordEl.dataset.word);
+        return;
+      }
+      const dictEl = e.target.closest(".dict-link");
+      if (dictEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        showWordPopup(dictEl.dataset.word);
+        return;
+      }
+      if (e.target.closest("#reveal-trigger-btn")) {
+        revealTranslation();
+        return;
+      }
+      if (e.target.closest("#card-speak-btn")) {
+        if (currentSentence) speak(currentSentence.en);
+        return;
+      }
+      if (e.target.closest("#empty-back-btn")) {
+        setMode("all");
+        return;
+      }
     });
 
-    // 설정: 폰트 크기 슬라이더
+    // 단어 키보드 접근성 (Enter/Space)
+    cardElement.addEventListener("keydown", (e) => {
+      const wordEl = e.target.closest && e.target.closest(".word-span");
+      if (wordEl && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        showWordPopup(wordEl.dataset.word);
+      }
+    });
+
+    // 설정: 테마
+    themeOpts.forEach(opt => {
+      opt.addEventListener("click", () => setupTheme(opt.dataset.theme));
+    });
+
+    // 설정: 폰트 크기
     fontSizeSlider.addEventListener("input", (e) => {
       const sizes = ["sm", "md", "lg", "xl"];
-      const selectedSize = sizes[parseInt(e.target.value)];
-      setupFontSize(selectedSize);
+      setupFontSize(sizes[parseInt(e.target.value)]);
     });
 
     // 설정: TTS 배속
@@ -874,51 +1078,45 @@ document.addEventListener("DOMContentLoaded", () => {
       saveSettingsToStorage();
     });
 
-    // 설정: 목소리 변경
+    // 설정: 목소리
     voiceSelect.addEventListener("change", (e) => {
       state.settings.ttsVoice = e.target.value;
       saveSettingsToStorage();
     });
 
-    // 설정: 자동 재생 여부
+    // 설정: 자동 재생
     autoPlayToggle.addEventListener("change", (e) => {
       state.settings.autoPlay = e.target.checked;
       saveSettingsToStorage();
     });
 
-    // 설정: 번역 상시 노출 여부
+    // 설정: 번역 상시 노출
     if (alwaysShowToggle) {
       alwaysShowToggle.addEventListener("change", (e) => {
         state.settings.alwaysShowTranslation = e.target.checked;
         saveSettingsToStorage();
-        renderCurrentSentence(); // 즉시 UI 업데이트 반영
+        renderCurrentSentence();
       });
     }
 
-    // 단어 검색창 닫기
     popupClose.addEventListener("click", hideWordPopup);
 
-    // 파일 임포트: 파일 업로드 트리거
+    // 파일 업로드
     fileUploadInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
-
       const reader = new FileReader();
-      reader.onload = function(evt) {
+      reader.onload = function (evt) {
         const text = evt.target.result;
         const name = file.name;
-        
         try {
           if (name.endsWith(".html") || name.endsWith(".htm")) {
-            // HTML 파서 가동
             const parsed = parseHtmlTranscript(text, name);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           } else if (name.endsWith(".json")) {
-            // JSON 파서 가동
             const parsed = parseJsonDataset(text);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           } else {
-            // 일반 텍스트 파서
             const parsed = parseRawText(text);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           }
@@ -927,16 +1125,17 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       };
       reader.readAsText(file);
+      // 같은 파일 재선택 가능하도록 초기화
+      e.target.value = "";
     });
 
-    // 파일 임포트: 직접 붙여넣기 트리거
+    // 직접 붙여넣기
     textSubmitBtn.addEventListener("click", () => {
       const text = textPasteArea.value.trim();
       if (!text) {
         alert("붙여넣을 텍스트 내용을 입력해 주세요.");
         return;
       }
-
       try {
         const parsed = parseRawText(text);
         if (parsed.length === 0) {
@@ -944,65 +1143,50 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         loadAndActivateNewDataset(`직접 입력 카드 (${parsed.length}문장)`, parsed);
-        textPasteArea.value = ""; // 초기화
+        textPasteArea.value = "";
       } catch (err) {
         alert(`텍스트 파싱 오류: ${err.message}`);
       }
     });
 
-    // ── 데스크톱 전용 키보드 단축키 연동 ──
+    // 데스크톱 키보드 단축키
     window.addEventListener("keydown", (e) => {
-      // 입력창 내부 타이핑 중일 때는 단축키 오작동 방지
       if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") {
         return;
       }
-
       const key = e.key;
-      const dataset = getCurrentDataset();
-
-      if (key === " ") { // 스페이스바 -> 번역 및 설명 보기
+      if (key === " ") {
         e.preventDefault();
-        if (!state.revealed) {
-          revealTranslation();
-        }
-      } else if (key === "ArrowLeft") { // 왼쪽 방향키 -> 이전 문장
+        if (!state.revealed) revealTranslation();
+      } else if (key === "ArrowLeft") {
         e.preventDefault();
         navigate("prev");
-      } else if (key === "ArrowRight") { // 오른쪽 방향키 -> 다음 문장
+      } else if (key === "ArrowRight") {
         e.preventDefault();
         navigate("next");
-      } else if (key === "Enter") { // 엔터키 -> 발음 재생
+      } else if (key === "Enter") {
         e.preventDefault();
-        const data = dataset[state.currentIndex];
-        if (data) speak(data.en);
+        if (currentSentence) speak(currentSentence.en);
       }
     });
 
-    // ── 모바일 스와이프(Swipe) 터치 제스처 연동 ──
+    // 모바일 스와이프 제스처
     let touchStartX = 0;
     let touchEndX = 0;
-    
     cardContainer.addEventListener("touchstart", (e) => {
       touchStartX = e.changedTouches[0].screenX;
     }, { passive: true });
-    
     cardContainer.addEventListener("touchend", (e) => {
       touchEndX = e.changedTouches[0].screenX;
       handleSwipeGesture();
     }, { passive: true });
-    
+
     function handleSwipeGesture() {
-      const threshold = 60; // 스와이프 트리거 거리 (픽셀)
+      const threshold = 60;
       const diff = touchStartX - touchEndX;
-      
       if (Math.abs(diff) > threshold) {
-        if (diff > 0) {
-          // 왼쪽으로 스와이프 -> 다음 문장 (Next)
-          navigate("next");
-        } else {
-          // 오른쪽으로 스와이프 -> 이전 문장 (Prev)
-          navigate("prev");
-        }
+        if (diff > 0) navigate("next");
+        else navigate("prev");
       }
     }
   }

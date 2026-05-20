@@ -1,0 +1,28 @@
+{
+  "name": "영한번역 — 영어 학습",
+  "short_name": "영한번역",
+  "description": "한 페이지에 한 문장씩, 듣기·번역·구조분석으로 영어를 공부하는 모바일 학습 앱",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c0b08",
+  "theme_color": "#0c0b08",
+  "categories": ["education"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

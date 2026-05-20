@@ -1068,6 +1068,85 @@ input:checked + .toggle-slider:before {
 .font-xl .sentence-en { font-size: 28px; }
 .font-xl .sentence-ko, .font-xl .notes-section { font-size: 22px; }
 
+/* ── 학습 모드 토글 (전체 / 즐겨찾기 복습) ── */
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background-color: var(--surface-color);
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.mode-opt {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  padding: 8px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: var(--font-sans);
+}
+
+.mode-opt.active {
+  background: linear-gradient(135deg, var(--accent-color), var(--accent-dim));
+  color: var(--bg-color);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── 단어 클릭 키보드 포커스 표시 ── */
+.word-span:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  background-color: var(--accent-light);
+  color: var(--accent-color);
+}
+
+/* ── 빈 상태 (복습 모드인데 별표 0개) ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 20px 8px;
+  margin: auto 0;
+}
+
+.empty-state .empty-emoji {
+  font-size: 40px;
+  color: var(--accent-color);
+  opacity: 0.85;
+}
+
+.empty-state h3 {
+  font-size: 17px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.empty-state p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.empty-state .reveal-trigger {
+  margin-top: 8px;
+  max-width: 260px;
+}
+
+/* ── 비활성화된 별표 버튼 ── */
+.bookmark-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 /* ── 데스크톱 뷰포트 센터링 ── */
 @media (min-width: 481px) {
   body {

@@ -8,8 +8,15 @@
   <title>영한번역 — 스마트폰용 영어 학습 웹앱</title>
   <meta name="description" content="한 페이지에 한 문장씩, 원어민 발음 듣기와 번역, 상세한 구조 분석 및 필수 암기 단어장으로 영어 회화와 인터뷰를 마스터하는 모바일 학습 앱입니다.">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="영한번역">
   <meta name="theme-color" content="#0c0b08">
+
+  <!-- PWA 매니페스트 및 아이콘 -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" type="image/png" href="icon-192.png">
 
   <!-- 스타일시트 링크 -->
   <link rel="stylesheet" href="style.css">
@@ -45,6 +52,12 @@
 
     <!-- ── 하단 고정 제어 바 ── -->
     <footer>
+      <!-- 학습 모드 토글 (전체 / 즐겨찾기 복습) -->
+      <div class="mode-toggle" id="mode-toggle" role="tablist" aria-label="학습 모드">
+        <button class="mode-opt active" data-mode="all" role="tab">전체</button>
+        <button class="mode-opt" data-mode="starred" role="tab">★ 즐겨찾기</button>
+      </div>
+
       <!-- 진행률 표시선 -->
       <div class="progress-bar-container">
         <div class="progress-bar" id="progress-bar"></div>
@@ -184,7 +197,7 @@
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v1.1.0 · Smartphone English Study PWA<br>
+          영한번역 v1.2.0 · Smartphone English Study PWA<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>
       </div>
