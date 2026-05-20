@@ -14,7 +14,8 @@ document.addEventListener("DOMContentLoaded", () => {
       fontSize: "md",
       ttsSpeed: 1.0,
       ttsVoice: "",
-      autoPlay: false
+      autoPlay: false,
+      alwaysShowTranslation: true
     },
     // 사용자 추가 파일 리스트 { id: { title, data: [...] } }
     customFiles: {}
@@ -51,6 +52,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const ttsSpeedVal = document.getElementById("tts-speed-val");
   const voiceSelect = document.getElementById("voice-select");
   const autoPlayToggle = document.getElementById("autoplay-toggle");
+  const alwaysShowToggle = document.getElementById("always-show-toggle");
 
   // 파일 추가 입력기
   const fileUploadInput = document.getElementById("file-upload");
@@ -70,6 +72,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setupTheme(state.settings.theme);
     setupFontSize(state.settings.fontSize);
     
+    // 항상 노출 토글 UI 상태 연동
+    if (alwaysShowToggle) {
+      alwaysShowToggle.checked = state.settings.alwaysShowTranslation;
+    }
+
     // TTS 목소리 세팅
     setupTTSVoices();
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
@@ -92,6 +99,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedTtsSpeed = parseFloat(localStorage.getItem("yh_ttsSpeed")) || 1.0;
       const savedTtsVoice = localStorage.getItem("yh_ttsVoice") || "";
       const savedAutoPlay = localStorage.getItem("yh_autoPlay") === "true";
+      const savedAlwaysShow = localStorage.getItem("yh_alwaysShow") !== "false"; // 기본값 true
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
       const savedCurrentIndex = parseInt(localStorage.getItem("yh_currentIndex")) || 0;
       
@@ -103,7 +111,8 @@ document.addEventListener("DOMContentLoaded", () => {
         fontSize: savedFontSize,
         ttsSpeed: savedTtsSpeed,
         ttsVoice: savedTtsVoice,
-        autoPlay: savedAutoPlay
+        autoPlay: savedAutoPlay,
+        alwaysShowTranslation: savedAlwaysShow
       };
       
       state.currentFileId = savedCurrentFile;
@@ -121,6 +130,7 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("yh_ttsSpeed", state.settings.ttsSpeed);
     localStorage.setItem("yh_ttsVoice", state.settings.ttsVoice);
     localStorage.setItem("yh_autoPlay", state.settings.autoPlay);
+    localStorage.setItem("yh_alwaysShow", state.settings.alwaysShowTranslation);
   }
 
   function saveStateToStorage() {
@@ -340,9 +350,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = dataset[state.currentIndex];
     if (!data) return;
 
-    // 번역 및 설명 가림막 초기화
-    state.revealed = false;
-    cardElement.classList.remove("revealed");
+    // 번역 및 설명 가림막 초기화 (항상 노출 설정에 따른 분기)
+    if (state.settings.alwaysShowTranslation) {
+      state.revealed = true;
+      cardElement.classList.add("revealed");
+    } else {
+      state.revealed = false;
+      cardElement.classList.remove("revealed");
+    }
 
     // 별표 상태 표시
     updateBookmarkUI(data.id);
@@ -830,6 +845,15 @@ document.addEventListener("DOMContentLoaded", () => {
       state.settings.autoPlay = e.target.checked;
       saveSettingsToStorage();
     });
+
+    // 설정: 번역 상시 노출 여부
+    if (alwaysShowToggle) {
+      alwaysShowToggle.addEventListener("change", (e) => {
+        state.settings.alwaysShowTranslation = e.target.checked;
+        saveSettingsToStorage();
+        renderCurrentSentence(); // 즉시 UI 업데이트 반영
+      });
+    }
 
     // 단어 검색창 닫기
     popupClose.addEventListener("click", hideWordPopup);
