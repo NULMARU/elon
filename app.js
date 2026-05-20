@@ -341,6 +341,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── 메인 카드 렌더링 ──
   function renderCurrentSentence() {
+    // 새 문장 진입 시 진행 중이던 TTS 오디오 즉시 전면 중단
+    if (typeof speechSynthesis !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+
     const dataset = getCurrentDataset();
     
     // 만약 현재 인덱스가 범위를 벗어나면 복구
@@ -572,8 +577,12 @@ document.addEventListener("DOMContentLoaded", () => {
   function speak(text) {
     if (typeof speechSynthesis === "undefined") return;
 
-    // 현재 진행 중인 음성은 중단
-    window.speechSynthesis.cancel();
+    // 만약 이미 재생 중(speaking) 상태라면 재생을 멈추고 🔊 상태로 복귀
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+      setSpeakButtonActive(false);
+      return;
+    }
 
     // 단어 기호 정제 (HTML 태그 제거)
     const cleanText = text.replace(/<\/?[^>]+(>|$)/g, "");
@@ -591,7 +600,38 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // 재생 시작 시 버튼 아이콘 ⏹️ 로 변경 및 애니메이션 클래스 주입
+    utterance.onstart = () => {
+      setSpeakButtonActive(true);
+    };
+
+    // 재생 완료 시 다시 🔊 로 복원
+    utterance.onend = () => {
+      setSpeakButtonActive(false);
+    };
+
+    // 오류 발생 시 다시 🔊 로 복원
+    utterance.onerror = () => {
+      setSpeakButtonActive(false);
+    };
+
     window.speechSynthesis.speak(utterance);
+  }
+
+  // 재생 버튼의 아이콘 및 활성화 상태(speaking 클래스) 제어 헬퍼 함수
+  function setSpeakButtonActive(active) {
+    const speakBtn = document.getElementById("card-speak-btn");
+    if (speakBtn) {
+      if (active) {
+        speakBtn.innerHTML = "⏹️";
+        speakBtn.classList.add("speaking");
+        speakBtn.setAttribute("aria-label", "음성 중단");
+      } else {
+        speakBtn.innerHTML = "🔊";
+        speakBtn.classList.remove("speaking");
+        speakBtn.setAttribute("aria-label", "문장 듣기");
+      }
+    }
   }
 
   // ── 이전/다음 문장 내비게이션 ──

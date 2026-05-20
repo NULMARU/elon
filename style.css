@@ -333,6 +333,24 @@ main {
   color: var(--surface-color);
 }
 
+.speak-btn.speaking {
+  background-color: rgba(255, 77, 77, 0.15);
+  color: #ff4d4d;
+  animation: pulse-ring 1.5s infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 77, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(255, 77, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 77, 0);
+  }
+}
+
 /* [트리거: 번역보기 버튼] */
 .reveal-trigger {
   margin: 10px 0;
@@ -402,7 +420,7 @@ main {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 14px 16px;
-  font-size: 13px;
+  font-size: inherit;
   line-height: 1.6;
 }
 
@@ -1039,16 +1057,16 @@ input:checked + .toggle-slider:before {
 
 /* ── 폰트 크기 변경 클래스 연동 ── */
 .font-sm .sentence-en { font-size: 18px; }
-.font-sm .sentence-ko { font-size: 14.5px; }
+.font-sm .sentence-ko, .font-sm .notes-section { font-size: 14.5px; }
 
 .font-md .sentence-en { font-size: 21px; }
-.font-md .sentence-ko { font-size: 16.5px; }
+.font-md .sentence-ko, .font-md .notes-section { font-size: 16.5px; }
 
 .font-lg .sentence-en { font-size: 24px; }
-.font-lg .sentence-ko { font-size: 19px; }
+.font-lg .sentence-ko, .font-lg .notes-section { font-size: 19px; }
 
 .font-xl .sentence-en { font-size: 28px; }
-.font-xl .sentence-ko { font-size: 22px; }
+.font-xl .sentence-ko, .font-xl .notes-section { font-size: 22px; }
 
 /* ── 데스크톱 뷰포트 센터링 ── */
 @media (min-width: 481px) {
