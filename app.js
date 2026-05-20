@@ -28,6 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const cardElement = document.getElementById("study-card");
   const cardContainer = document.getElementById("card-container");
   const fileSelect = document.getElementById("file-select");
+  const fileListDashboard = document.getElementById("file-list-dashboard");
   
   // 헤더 버튼
   const settingsBtn = document.getElementById("settings-btn");
@@ -199,18 +200,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── 파일 선택 드롭다운 채우기 ──
+  // ── 파일 선택 드롭다운 및 대시보드 채우기 ──
   function populateFileDropdown() {
+    // 1. 헤더 드롭다운 동기화
     fileSelect.innerHTML = "";
     
-    // 1. 기본 파일
+    // 기본 파일 옵션 추가
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "default_interview";
     defaultOpt.textContent = "Elon & Sunak 인터뷰";
     if (state.currentFileId === "default_interview") defaultOpt.selected = true;
     fileSelect.appendChild(defaultOpt);
 
-    // 2. 커스텀 파일들
+    // 커스텀 파일 옵션 추가
     Object.keys(state.customFiles).forEach(id => {
       const opt = document.createElement("option");
       opt.value = id;
@@ -218,6 +220,104 @@ document.addEventListener("DOMContentLoaded", () => {
       if (state.currentFileId === id) opt.selected = true;
       fileSelect.appendChild(opt);
     });
+
+    // 2. 설정창 내부 파일 대시보드 동기화
+    if (!fileListDashboard) return;
+    fileListDashboard.innerHTML = "";
+
+    // A. 기본 파일 카드 렌더링
+    const defaultIsActive = state.currentFileId === "default_interview";
+    const defaultCard = document.createElement("div");
+    defaultCard.className = `file-item-card ${defaultIsActive ? "active" : ""}`;
+    defaultCard.innerHTML = `
+      <div class="file-item-info">
+        <div class="file-item-title">Elon & Sunak 인터뷰</div>
+        <div class="file-item-meta">
+          <span class="file-item-badge">기본</span>
+          <span>28 문장</span>
+        </div>
+      </div>
+    `;
+    defaultCard.addEventListener("click", () => {
+      if (state.currentFileId !== "default_interview") {
+        selectFile("default_interview");
+      }
+    });
+    fileListDashboard.appendChild(defaultCard);
+
+    // B. 사용자 커스텀 파일 카드 렌더링
+    Object.keys(state.customFiles).forEach(id => {
+      const fileData = state.customFiles[id];
+      const isActive = state.currentFileId === id;
+      const card = document.createElement("div");
+      card.className = `file-item-card ${isActive ? "active" : ""}`;
+      card.innerHTML = `
+        <div class="file-item-info">
+          <div class="file-item-title" title="${fileData.title}">${fileData.title}</div>
+          <div class="file-item-meta">
+            <span class="file-item-badge">사용자</span>
+            <span>${fileData.data.length} 문장</span>
+          </div>
+        </div>
+        <button class="file-delete-btn" title="파일 삭제" aria-label="파일 삭제">
+          🗑️
+        </button>
+      `;
+      
+      // 카드 클릭 이벤트 (파일 활성화)
+      card.addEventListener("click", () => {
+        if (state.currentFileId !== id) {
+          selectFile(id);
+        }
+      });
+
+      // 삭제 버튼 클릭 이벤트
+      const deleteBtn = card.querySelector(".file-delete-btn");
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation(); // 카드 클릭으로 전파되는 것 방지
+        deleteCustomFile(id);
+      });
+
+      fileListDashboard.appendChild(card);
+    });
+  }
+
+  // ── 파일 선택 처리 ──
+  function selectFile(fileId) {
+    state.currentFileId = fileId;
+    state.currentIndex = 0;
+    
+    // UI 전체 동기화 및 학습 화면 갱신
+    populateFileDropdown();
+    renderCurrentSentence();
+    
+    // 헤더 드롭다운 값도 강제 동기화
+    fileSelect.value = fileId;
+  }
+
+  // ── 커스텀 파일 삭제 처리 ──
+  function deleteCustomFile(fileId) {
+    const fileTitle = state.customFiles[fileId] ? state.customFiles[fileId].title : "해당 파일";
+    if (!confirm(`'${fileTitle}' 파일을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없으며, 학습 진도도 함께 삭제됩니다.`)) {
+      return;
+    }
+
+    // 데이터 삭제
+    delete state.customFiles[fileId];
+    saveStateToStorage();
+
+    // 만약 현재 공부하던 파일이 삭제된 파일이면 기본 인터뷰로 강제 변경
+    if (state.currentFileId === fileId) {
+      state.currentFileId = "default_interview";
+      state.currentIndex = 0;
+      saveStateToStorage();
+    }
+
+    // UI 동기화
+    populateFileDropdown();
+    renderCurrentSentence();
+    
+    alert("파일이 안전하게 삭제되었습니다.");
   }
 
   // ── 현재 영어 문장 학습용 데이터 추출 ──
@@ -689,9 +789,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 학습 파일 전환
     fileSelect.addEventListener("change", (e) => {
-      state.currentFileId = e.target.value;
-      state.currentIndex = 0;
-      renderCurrentSentence();
+      selectFile(e.target.value);
     });
 
     // 하단 제어
