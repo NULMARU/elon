@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.1 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 영문 텍스트 직접 붙여넣기
+ * v1.3.2 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 줄바꿈 기반 텍스트 분할
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -990,17 +990,19 @@ document.addEventListener("DOMContentLoaded", () => {
       const text = extracted.text;
       if (detectImportLanguage(text) !== "en") return;
 
-      const chunks = splitIntoSentences(text);
-      chunks.forEach(chunk => {
-        const clean = cleanImportText(chunk);
-        if (clean.length < 12 || seen.has(clean.toLowerCase())) return;
+      const chunks = splitPlainEnglishTextEntries(text);
+      chunks.forEach(entry => {
+        const clean = cleanImportText(entry.text);
+        if (!isEnglishImportCandidate(clean) || seen.has(clean.toLowerCase())) return;
         seen.add(clean.toLowerCase());
         cards.push(makeImportedCard(
           idPrefix,
           cards.length,
           extracted.speaker || "Speaker",
           clean,
-          "번역 없음 - 영어 원문만 가져왔습니다."
+          "번역 없음 - 영어 원문만 가져왔습니다.",
+          null,
+          { preserveUnit: entry.preserveUnit }
         ));
       });
     });
@@ -1021,7 +1023,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (lines.length > 0) return uniqueImportLines(lines);
 
     const fallback = cleanImportText(root.textContent || "");
-    return fallback ? uniqueImportLines(splitIntoSentences(fallback).filter(text => !isImportNoise(text))) : [];
+    if (!fallback) return [];
+    const englishUnits = splitPlainEnglishText(root.textContent || "");
+    return englishUnits.length
+      ? uniqueImportLines(englishUnits)
+      : uniqueImportLines(splitIntoSentences(fallback).filter(text => !isImportNoise(text)));
   }
 
   function parseLineSequenceHtml(lines, idPrefix) {
@@ -1187,6 +1193,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return englishWords.length >= 7;
   }
 
+  function isEnglishImportCandidate(text) {
+    const clean = cleanImportText(text);
+    const englishWords = clean.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    const koreanCount = (clean.match(/[가-힣]/g) || []).length;
+    if (koreanCount > 0 || englishWords.length < 2) return false;
+    if (isNoteHeading(clean) || isImportNoise(clean)) return false;
+    return true;
+  }
+
   function isKoreanImportLine(text) {
     const clean = cleanImportText(text);
     const koreanCount = (clean.match(/[가-힣]/g) || []).length;
@@ -1293,14 +1308,16 @@ document.addEventListener("DOMContentLoaded", () => {
     return index % 2 === 0 ? "Speaker A" : "Speaker B";
   }
 
-  function makeImportedCard(idPrefix, index, speaker, en, ko, notes = null) {
-    return {
+  function makeImportedCard(idPrefix, index, speaker, en, ko, notes = null, meta = null) {
+    const card = {
       id: `custom_${idPrefix}_${index}`,
       speaker: speaker || "Speaker",
       en: cleanImportText(en),
       ko: cleanImportText(ko),
       notes
     };
+    if (meta?.preserveUnit) card.preserveUnit = true;
+    return card;
   }
 
   function safeImportIdPrefix(fileName) {
@@ -1312,10 +1329,16 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function cleanImportText(text) {
-    return String(text || "")
-      .replace(/\u00a0/g, " ")
+    return normalizeImportMultilineText(text)
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function normalizeImportMultilineText(text) {
+    return String(text || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\r\n?/g, "\n");
   }
 
   function looksLikeHtml(text) {
@@ -1739,19 +1762,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 3. Raw Text 붙여넣기 파서
   function parseRawText(rawText) {
-    const lines = rawText.split("\n");
+    const lines = normalizeImportMultilineText(rawText).split("\n");
     const parsedData = [];
     const plainEnglishLines = [];
 
     const flushPlainEnglish = () => {
       if (plainEnglishLines.length === 0) return;
-      splitPlainEnglishText(plainEnglishLines.join("\n")).forEach((en, offset) => {
+      splitPlainEnglishTextEntries(plainEnglishLines.join("\n"), { dedupe: false }).forEach((entry, offset) => {
         parsedData.push({
           id: `pasted_en_${Date.now()}_${parsedData.length}_${offset}`,
           speaker: "Tutor",
-          en,
+          en: entry.text,
           ko: MISSING_TRANSLATION_TEXT,
-          notes: null
+          notes: null,
+          preserveUnit: entry.preserveUnit
         });
       });
       plainEnglishLines.length = 0;
@@ -1796,7 +1820,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ko: ko,
           notes: parsedNotes
         });
-      } else if (isEnglishCardLine(trimmed)) {
+      } else if (isEnglishImportCandidate(trimmed)) {
         plainEnglishLines.push(trimmed);
       }
     });
@@ -1805,27 +1829,95 @@ document.addEventListener("DOMContentLoaded", () => {
     return parsedData;
   }
 
-  function splitPlainEnglishText(text) {
+  function splitPlainEnglishText(text, options = {}) {
+    return splitPlainEnglishTextEntries(text, options).map(entry => entry.text);
+  }
+
+  function splitPlainEnglishTextEntries(text, options = {}) {
+    const dedupe = options.dedupe !== false;
     const seen = new Set();
     const cards = [];
-    const chunks = String(text || "")
-      .replace(/\r/g, "\n")
+    const chunks = normalizeImportMultilineText(text)
       .split(/\n{2,}|(?=\n\s*[-•*]\s+)/)
-      .map(block => cleanImportText(block.replace(/^[-•*]\s*/gm, "")))
+      .map(block => block.replace(/^[-•*]\s*/gm, ""))
       .filter(Boolean);
 
     chunks.forEach(chunk => {
-      const sentences = splitIntoSentences(chunk);
-      sentences.forEach(sentence => {
-        const clean = cleanImportText(sentence);
+      splitEnglishLearningUnitEntries(chunk).forEach(entry => {
+        const clean = cleanImportText(entry.text);
         const key = clean.toLowerCase();
-        if (!isEnglishCardLine(clean) || seen.has(key)) return;
-        seen.add(key);
-        cards.push(clean);
+        if (!isEnglishImportCandidate(clean)) return;
+        if (dedupe && seen.has(key)) return;
+        if (dedupe) seen.add(key);
+        cards.push({ text: clean, preserveUnit: entry.preserveUnit });
       });
     });
 
     return cards;
+  }
+
+  function splitEnglishLearningUnits(text) {
+    return splitEnglishLearningUnitEntries(text).map(entry => entry.text);
+  }
+
+  function splitEnglishLearningUnitEntries(text) {
+    const normalized = normalizeImportMultilineText(text);
+    const lineUnits = normalized
+      .split("\n")
+      .map(line => cleanImportText(line.replace(/^[-•*]\s*/, "")))
+      .filter(line => isEnglishImportCandidate(line));
+    const sentenceUnits = splitIntoSentences(cleanImportText(normalized))
+      .map(cleanImportText)
+      .filter(line => isEnglishImportCandidate(line));
+
+    const useLineBased = shouldUseLineBasedSplit(lineUnits, sentenceUnits);
+    let units = useLineBased ? lineUnits : sentenceUnits;
+    if (useLineBased && units.length > 1 && isLikelyImportTitle(units[0])) {
+      units = units.slice(1);
+    }
+
+    return units.flatMap(unit => {
+      return splitOverlongEnglishUnit(unit).map(part => ({
+        text: part,
+        preserveUnit: useLineBased
+      }));
+    });
+  }
+
+  function shouldUseLineBasedSplit(lineUnits, sentenceUnits) {
+    if (lineUnits.length < 3) return false;
+    if (sentenceUnits.length <= 1) return true;
+    if (lineUnits.length >= sentenceUnits.length * 2) return true;
+    const shortLineCount = lineUnits.filter(line => countWords(line) <= 12).length;
+    return shortLineCount >= Math.ceil(lineUnits.length * 0.7);
+  }
+
+  function isLikelyImportTitle(text) {
+    const clean = cleanImportText(text);
+    const words = countWords(clean);
+    if (/[.?!…]["”’']?$/.test(clean)) return false;
+    return words <= 8 && /[-–—:]/.test(clean);
+  }
+
+  function splitOverlongEnglishUnit(text) {
+    const clean = cleanImportText(text);
+    const words = clean.match(/\S+/g) || [];
+    const maxWords = 18;
+    const maxChars = 150;
+    if (words.length <= maxWords && clean.length <= maxChars) return [clean];
+
+    const sentenceUnits = splitIntoSentences(clean)
+      .map(cleanImportText)
+      .filter(unit => unit && unit !== clean);
+    if (sentenceUnits.length > 1) {
+      return sentenceUnits.flatMap(unit => splitOverlongEnglishUnit(unit));
+    }
+
+    const chunks = [];
+    for (let i = 0; i < words.length; i += maxWords) {
+      chunks.push(words.slice(i, i + maxWords).join(" "));
+    }
+    return chunks;
   }
 
   // ── 새 학습 리스트 저장 및 활성화 ──
@@ -1904,7 +1996,8 @@ document.addEventListener("DOMContentLoaded", () => {
             en: en,
             ko: koSents[i],
             // 분할 시 노트는 정렬 보장이 안 되므로 첫 조각에만 유지
-            notes: i === 0 ? (card.notes || null) : null
+            notes: i === 0 ? (card.notes || null) : null,
+            preserveUnit: card.preserveUnit
           });
         });
       } else {
@@ -1919,6 +2012,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const last = merged[merged.length - 1];
       const canMerge = last
         && last.speaker === card.speaker
+        && !last.preserveUnit && !card.preserveUnit
         && !isImportantCard(last) && !isImportantCard(card)
         && (cardLoad(last) + cardLoad(card)) <= budget;
       if (canMerge) {
@@ -1927,7 +2021,14 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!last.notes && card.notes) last.notes = card.notes;
       } else {
         // 새 카드는 복사본으로 push → 입력(cards/rawData) 불변 보장
-        merged.push({ id: card.id, speaker: card.speaker, en: card.en, ko: card.ko, notes: card.notes || null });
+        merged.push({
+          id: card.id,
+          speaker: card.speaker,
+          en: card.en,
+          ko: card.ko,
+          notes: card.notes || null,
+          preserveUnit: !!card.preserveUnit
+        });
       }
     }
     return merged;
