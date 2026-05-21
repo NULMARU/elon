@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.2.1 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / HTML 임포트 보강
+ * v1.2.2 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / HTML 번역·설명 임포트 보강
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -919,6 +919,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function parseLooseHtmlText(doc, idPrefix) {
+    const readableLines = collectReadableHtmlLines(doc);
+    const fromLineSequence = parseLineSequenceHtml(readableLines, idPrefix);
+    if (fromLineSequence.length > 0) return fromLineSequence;
+
     const directEntries = [];
     const selector = [
       ".en-text", ".english", ".eng", "[lang^='en']", "[data-lang='en']",
@@ -939,10 +943,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const entries = [];
     const pairedLines = [];
-    collectReadableHtmlLines(doc).forEach((line, index) => {
+    readableLines.forEach((line, index) => {
       const pair = splitInlineImportPair(line);
       if (pair) {
-        pairedLines.push(makeImportedCard(idPrefix, pairedLines.length, "Tutor", pair.en, pair.ko));
+        pairedLines.push(makeImportedCard(idPrefix, pairedLines.length, "Tutor", pair.en, pair.ko, buildNotesFromImportLines(pair.notes || [])));
         return;
       }
 
@@ -991,8 +995,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const root = doc.body || doc;
     Array.from(root.querySelectorAll("script, style, noscript, svg, canvas, audio, video")).forEach(el => el.remove());
 
-    const blocks = Array.from(root.querySelectorAll("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div.dialogue-text"));
+    const blocks = Array.from(root.querySelectorAll("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div, section, article"));
     const lines = blocks
+      .filter(el => isReadableImportElement(el))
       .map(el => cleanImportText(el.textContent || ""))
       .filter(text => !isImportNoise(text));
 
@@ -1000,6 +1005,72 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const fallback = cleanImportText(root.textContent || "");
     return fallback ? uniqueImportLines(splitIntoSentences(fallback).filter(text => !isImportNoise(text))) : [];
+  }
+
+  function parseLineSequenceHtml(lines, idPrefix) {
+    const parsedData = [];
+    let pending = null;
+
+    const finalizePending = () => {
+      if (!pending) return;
+      if (pending.en && pending.ko) {
+        parsedData.push(makeImportedCard(
+          idPrefix,
+          parsedData.length,
+          pending.speaker,
+          pending.en,
+          pending.ko,
+          buildNotesFromImportLines(pending.notes)
+        ));
+      }
+      pending = null;
+    };
+
+    lines.forEach((line, index) => {
+      const pair = splitInlineImportPair(line);
+      if (pair) {
+        finalizePending();
+        parsedData.push(makeImportedCard(
+          idPrefix,
+          parsedData.length,
+          "Tutor",
+          pair.en,
+          pair.ko,
+          buildNotesFromImportLines(pair.notes || [])
+        ));
+        return;
+      }
+
+      const extracted = extractSpeakerPrefix(line);
+      const rawText = cleanImportText(extracted.text);
+      const text = stripImportLabel(rawText);
+      if (!text || isImportNoise(text)) return;
+
+      if (isEnglishCardLine(text)) {
+        finalizePending();
+        pending = {
+          speaker: extracted.speaker || (index % 2 === 0 ? "Speaker A" : "Speaker B"),
+          en: text,
+          ko: "",
+          notes: []
+        };
+        return;
+      }
+
+      if (!pending) return;
+
+      if (!pending.ko && isKoreanImportLine(text)) {
+        pending.ko = text;
+        return;
+      }
+
+      if (isUsefulNoteLine(rawText)) {
+        pending.notes.push(rawText);
+      }
+    });
+
+    finalizePending();
+    return parsedData;
   }
 
   function pairImportEntries(entries, idPrefix, offset = 0) {
@@ -1034,14 +1105,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (candidates && candidates.length >= 2) {
       const en = cleanImportText(candidates[0]);
       const ko = cleanImportText(candidates.slice(1).join(" "));
-      if (detectImportLanguage(en) === "en" && detectImportLanguage(ko) === "ko") return { en, ko };
+      if (isEnglishCardLine(en) && isKoreanImportLine(ko)) return { en, ko };
     }
 
     const koreanStart = line.search(/[가-힣]/);
     if (koreanStart > 10) {
       const en = cleanImportText(line.slice(0, koreanStart).replace(/[-–—:：/]+$/, ""));
       const ko = cleanImportText(line.slice(koreanStart));
-      if (detectImportLanguage(en) === "en" && detectImportLanguage(ko) === "ko") return { en, ko };
+      if (isEnglishCardLine(en) && isKoreanImportLine(ko)) return { en, ko };
     }
 
     return null;
@@ -1066,6 +1137,133 @@ document.addEventListener("DOMContentLoaded", () => {
     if (koreanCount >= 2 && englishCount < 12) return "ko";
     if (koreanCount >= 8 && koreanCount > englishCount / 2) return "ko";
     return "mixed";
+  }
+
+  function isReadableImportElement(el) {
+    const text = cleanImportText(el.textContent || "");
+    if (isImportNoise(text)) return false;
+
+    const tag = el.tagName.toLowerCase();
+    if (["p", "li", "blockquote", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6"].includes(tag)) return true;
+
+    const meaningfulChild = Array.from(el.children).some(child => {
+      const childTag = child.tagName.toLowerCase();
+      if (!["p", "li", "blockquote", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "div", "section", "article"].includes(childTag)) {
+        return false;
+      }
+      const childText = cleanImportText(child.textContent || "");
+      return childText.length >= 4 && childText !== text;
+    });
+
+    return !meaningfulChild;
+  }
+
+  function isEnglishCardLine(text) {
+    const clean = cleanImportText(text);
+    const englishWords = clean.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    const koreanCount = (clean.match(/[가-힣]/g) || []).length;
+    if (koreanCount > 0 || englishWords.length < 3) return false;
+    if (isNoteHeading(clean)) return false;
+    if (/^[A-Za-z][A-Za-z\s'-]{1,36}\s*[:：]\s+/.test(clean) && englishWords.length < 10) return false;
+    if (/[.?!…]["”’']?$/.test(clean)) return true;
+    if (/[—–-]/.test(clean) && englishWords.length >= 4) return true;
+    return englishWords.length >= 7;
+  }
+
+  function isKoreanImportLine(text) {
+    const clean = cleanImportText(text);
+    const koreanCount = (clean.match(/[가-힣]/g) || []).length;
+    if (koreanCount < 2) return false;
+    if (isNoteHeading(clean)) return false;
+    return clean.length >= 5;
+  }
+
+  function isUsefulNoteLine(text) {
+    const clean = cleanImportText(text);
+    if (isImportNoise(clean)) return false;
+    if (isEnglishCardLine(clean)) return false;
+    if (clean.length > 500) return false;
+    return /[A-Za-z가-힣]/.test(clean);
+  }
+
+  function isNoteHeading(text) {
+    return /^(key\s+vocabulary|vocabulary|words?|단어|어휘|sentence\s+structure|structure|문장\s*구조|구조|must\s+memorize|필수\s*암기|암기|pattern|speaking\s+pattern|패턴|해설|설명|학습\s*포인트|translation|번역|한국어|korean)$/i.test(cleanImportText(text));
+  }
+
+  function stripImportLabel(text) {
+    return cleanImportText(text)
+      .replace(/^(?:english|en|영어|원문|sentence|문장)\s*\d*\s*[:：.-]\s*/i, "")
+      .replace(/^(?:translation|korean|ko|번역|해석|한국어)\s*[:：.-]\s*/i, "")
+      .replace(/^(?:key\s+vocabulary|vocabulary|words?|단어|어휘|sentence\s+structure|structure|문장\s*구조|must\s+memorize|필수\s*암기|pattern|패턴|해설|설명|학습\s*포인트)\s*[:：.-]\s*/i, "");
+  }
+
+  function buildNotesFromImportLines(lines) {
+    const cleanLines = (lines || [])
+      .map(raw => ({ raw: cleanImportText(raw), clean: stripImportLabel(raw) }))
+      .filter(item => item.clean && !isImportNoise(item.clean));
+    if (cleanLines.length === 0) return null;
+
+    const words = [];
+    const structure = [];
+    const mustMemorize = [];
+    const pattern = [];
+    const extra = [];
+
+    cleanLines.forEach(({ raw, clean }) => {
+      const wordPairs = parseWordPairs(clean);
+      if (wordPairs.length > 0) {
+        wordPairs.forEach(pair => {
+          if (!words.some(w => w.word.toLowerCase() === pair.word.toLowerCase())) words.push(pair);
+        });
+        return;
+      }
+
+      if (/(structure|chunk|문장\s*구조|구조|직독직해|해석\s*순서)/i.test(raw)) {
+        structure.push(clean);
+      } else if (/(pattern|활용|응용|speaking|회화|패턴)/i.test(raw)) {
+        pattern.push(clean);
+      } else if (/(must|memorize|필수|암기|주의|포인트|핵심|뉘앙스)/i.test(raw)) {
+        mustMemorize.push(clean);
+      } else {
+        extra.push(clean);
+      }
+    });
+
+    const notes = {};
+    if (words.length > 0) notes.words = words.slice(0, 12);
+    if (structure.length > 0) notes.structure = bulletJoin(structure);
+    if (mustMemorize.length > 0 || extra.length > 0) notes.mustMemorize = bulletJoin([...mustMemorize, ...extra]);
+    if (pattern.length > 0) notes.pattern = bulletJoin(pattern);
+
+    return Object.keys(notes).length > 0 ? notes : null;
+  }
+
+  function parseWordPairs(line) {
+    const parts = cleanImportText(line)
+      .replace(/^[-•*]\s*/, "")
+      .split(/[;；]|(?:\s{2,})/)
+      .map(part => part.trim())
+      .filter(Boolean);
+
+    const pairs = [];
+    parts.forEach(part => {
+      const match = part.match(/^([A-Za-z][A-Za-z0-9'’().,\s-]{0,48})\s*(?:=|:|：|–|—|-)\s*(.{2,120})$/);
+      if (!match) return;
+      const word = cleanImportText(match[1]).replace(/^[-•*]\s*/, "");
+      const meaning = cleanImportText(match[2]);
+      if (!/[A-Za-z]/.test(word) || !/[가-힣]/.test(meaning)) return;
+      if (word.split(/\s+/).length > 6) return;
+      pairs.push({ word, meaning });
+    });
+
+    return pairs;
+  }
+
+  function bulletJoin(lines) {
+    return lines
+      .map(line => line.replace(/^[-•*]\s*/, ""))
+      .map(line => `• ${line}`)
+      .join("<br>");
   }
 
   function readImportSpeaker(el, index) {
