@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.2.2 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / HTML 번역·설명 임포트 보강
+ * v1.3.0 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 업로드 자동 번역·설명 보강
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -19,7 +19,9 @@ document.addEventListener("DOMContentLoaded", () => {
       ttsVoice: "",
       autoPlay: false,
       alwaysShowTranslation: true,
-      cardDensity: "medium"        // 카드 분량: "short" | "medium" | "long" (임포트 시 청킹 기준)
+      cardDensity: "medium",       // 카드 분량: "short" | "medium" | "long" (임포트 시 청킹 기준)
+      autoEnrichImports: true,     // 업로드 자료에 번역/설명이 없을 때 자동 보강
+      externalAutoTranslate: true  // 번역 누락 시 외부 번역 서비스 사용 (문장 단위 전송)
     },
     // 사용자 추가 파일 메모리 캐시 { id: { title, data:[...], createdAt, updatedAt } }
     // 진실 원본(source of truth)은 IndexedDB (미지원 시 localStorage 폴백)
@@ -65,6 +67,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const voiceSelect = document.getElementById("voice-select");
   const autoPlayToggle = document.getElementById("autoplay-toggle");
   const alwaysShowToggle = document.getElementById("always-show-toggle");
+  const autoEnrichToggle = document.getElementById("auto-enrich-toggle");
+  const externalTranslateToggle = document.getElementById("external-translate-toggle");
   const cardDensitySlider = document.getElementById("card-density-slider");
   const cardDensityVal = document.getElementById("card-density-val");
 
@@ -273,6 +277,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (autoPlayToggle) {
       autoPlayToggle.checked = state.settings.autoPlay;
     }
+    if (autoEnrichToggle) {
+      autoEnrichToggle.checked = state.settings.autoEnrichImports;
+    }
+    if (externalTranslateToggle) {
+      externalTranslateToggle.checked = state.settings.externalAutoTranslate;
+      externalTranslateToggle.disabled = !state.settings.autoEnrichImports;
+    }
     if (ttsSpeedSlider) {
       ttsSpeedSlider.value = state.settings.ttsSpeed;
       ttsSpeedVal.textContent = `${Number(state.settings.ttsSpeed).toFixed(2)}x`;
@@ -309,6 +320,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedAutoPlay = localStorage.getItem("yh_autoPlay") === "true";
       const savedAlwaysShow = localStorage.getItem("yh_alwaysShow") !== "false"; // 기본값 true
       const savedDensity = localStorage.getItem("yh_cardDensity") || "medium";
+      const savedAutoEnrich = localStorage.getItem("yh_autoEnrichImports") !== "false"; // 기본값 true
+      const savedExternalTranslate = localStorage.getItem("yh_externalAutoTranslate") !== "false"; // 기본값 true
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
       const savedMode = localStorage.getItem("yh_mode") === "starred" ? "starred" : "all";
 
@@ -322,7 +335,9 @@ document.addEventListener("DOMContentLoaded", () => {
         ttsVoice: savedTtsVoice,
         autoPlay: savedAutoPlay,
         alwaysShowTranslation: savedAlwaysShow,
-        cardDensity: (["short", "medium", "long"].includes(savedDensity) ? savedDensity : "medium")
+        cardDensity: (["short", "medium", "long"].includes(savedDensity) ? savedDensity : "medium"),
+        autoEnrichImports: savedAutoEnrich,
+        externalAutoTranslate: savedExternalTranslate
       };
 
       state.currentFileId = savedCurrentFile;
@@ -343,6 +358,8 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("yh_autoPlay", state.settings.autoPlay);
       localStorage.setItem("yh_alwaysShow", state.settings.alwaysShowTranslation);
       localStorage.setItem("yh_cardDensity", state.settings.cardDensity);
+      localStorage.setItem("yh_autoEnrichImports", state.settings.autoEnrichImports);
+      localStorage.setItem("yh_externalAutoTranslate", state.settings.externalAutoTranslate);
     } catch (e) {
       console.error("설정 저장 실패:", e);
     }
@@ -1324,17 +1341,397 @@ document.addEventListener("DOMContentLoaded", () => {
     return false;
   }
 
+  // ───────────────────────────────────────────────────────────
+  // 업로드 자동 보강: 번역 누락 + 단어/설명 누락 보완
+  // ───────────────────────────────────────────────────────────
+  const MISSING_TRANSLATION_TEXT = "번역 없음 - 영어 원문만 가져왔습니다.";
+  const TRANSLATION_CACHE_KEY = "yh_translation_cache_v1";
+
+  const STOP_WORDS = new Set([
+    "the", "a", "an", "and", "or", "but", "so", "to", "of", "in", "on", "at", "for", "from", "with", "without", "by",
+    "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did", "have", "has", "had", "will", "would",
+    "can", "could", "should", "may", "might", "must", "this", "that", "these", "those", "it", "its", "we", "you", "they",
+    "he", "she", "i", "our", "your", "their", "his", "her", "my", "as", "than", "then", "there", "here", "about", "into"
+  ]);
+
+  const PHRASE_MEANINGS = [
+    ["without compromise", "타협 없이"],
+    ["to deliver", "제공하다 / 전달하다"],
+    ["at scale", "대규모로"],
+    ["in real time", "실시간으로"],
+    ["from time to time", "때때로"],
+    ["take seriously", "진지하게 받아들이다"],
+    ["play a role", "역할을 하다"],
+    ["pose a risk", "위험을 야기하다"],
+    ["make sure", "확실히 하다"],
+    ["move faster", "더 빠르게 움직이다 / 진행하다"],
+    ["lower prices", "더 낮은 가격"],
+    ["launch schedule", "출시 일정"],
+    ["customer experience", "고객 경험"],
+    ["supply chain", "공급망"],
+    ["energy storage", "에너지 저장"],
+    ["sustainable future", "지속가능한 미래"],
+    ["artificial intelligence", "인공지능"],
+    ["public safety", "공공 안전"],
+    ["competitive advantage", "경쟁 우위"],
+    ["market share", "시장 점유율"],
+    ["long term", "장기적인"],
+    ["short term", "단기적인"],
+    ["operating margin", "영업이익률"],
+    ["free cash flow", "잉여 현금흐름"],
+    ["gross margin", "매출총이익률"],
+    ["full self-driving", "완전자율주행"]
+  ];
+
+  const WORD_MEANINGS = {
+    accelerate: "가속하다",
+    access: "접근, 이용 권한",
+    adoption: "도입, 채택",
+    advanced: "고급의, 발전된",
+    advantage: "이점, 우위",
+    affordable: "감당 가능한, 저렴한",
+    algorithm: "알고리즘",
+    artificial: "인공의",
+    autonomous: "자율적인",
+    battery: "배터리",
+    breakthrough: "돌파구, 획기적 진전",
+    capacity: "용량, 역량",
+    capital: "자본",
+    challenge: "과제, 도전",
+    charging: "충전",
+    climate: "기후",
+    commitment: "약속, 전념",
+    competitive: "경쟁력 있는",
+    compromise: "타협",
+    constraint: "제약",
+    constrained: "제약을 받는",
+    consumer: "소비자",
+    customer: "고객",
+    data: "데이터",
+    demand: "수요",
+    deploy: "배치하다, 투입하다",
+    deliver: "제공하다, 전달하다",
+    delivery: "인도, 배송, 제공",
+    design: "설계하다, 디자인",
+    development: "개발, 발전",
+    efficiency: "효율성",
+    efficient: "효율적인",
+    electric: "전기의",
+    energy: "에너지",
+    engineer: "엔지니어",
+    expand: "확장하다",
+    expansion: "확장",
+    expected: "예상되는",
+    experience: "경험",
+    financial: "재무의, 금융의",
+    fleet: "차량군, 함대",
+    future: "미래",
+    growth: "성장",
+    hardware: "하드웨어",
+    improve: "개선하다",
+    improvement: "개선",
+    innovation: "혁신",
+    launch: "출시하다, 발사하다",
+    leadership: "리더십",
+    margin: "이익률, 여백",
+    market: "시장",
+    mission: "사명, 임무",
+    mobility: "이동성",
+    model: "모델, 방식",
+    optimize: "최적화하다",
+    performance: "성능",
+    platform: "플랫폼",
+    price: "가격",
+    production: "생산",
+    profitability: "수익성",
+    profitable: "수익성 있는",
+    progress: "진전, 진행",
+    range: "주행거리, 범위",
+    reliable: "신뢰할 수 있는",
+    revenue: "매출",
+    risk: "위험",
+    robotaxi: "로보택시",
+    safety: "안전",
+    scalable: "확장 가능한",
+    schedule: "일정",
+    software: "소프트웨어",
+    strategy: "전략",
+    sustainable: "지속가능한",
+    sustainability: "지속가능성",
+    technology: "기술",
+    transition: "전환",
+    unconstrained: "제약 없는",
+    vehicle: "차량",
+    vision: "비전",
+    volume: "물량, 규모"
+  };
+
+  async function enrichImportedDataset(cards) {
+    if (!state.settings.autoEnrichImports) {
+      return { cards, translated: 0, notesAdded: 0, fallbackTranslations: 0 };
+    }
+
+    const stats = { translated: 0, notesAdded: 0, fallbackTranslations: 0 };
+    const enriched = await mapWithConcurrency(cards, 3, async (card) => {
+      const next = { ...card };
+
+      if (needsTranslation(next)) {
+        const translated = await autoTranslateToKorean(next.en);
+        next.ko = translated.text;
+        if (translated.fallback) stats.fallbackTranslations += 1;
+        else stats.translated += 1;
+      }
+
+      const autoNotes = buildAutoStudyNotes(next.en, next.ko);
+      const mergedNotes = mergeStudyNotes(next.notes, autoNotes);
+      if (notesWereAdded(next.notes, mergedNotes)) stats.notesAdded += 1;
+      next.notes = mergedNotes;
+
+      return next;
+    });
+
+    return { cards: enriched, ...stats };
+  }
+
+  function needsTranslation(card) {
+    const ko = cleanImportText(card.ko || "");
+    return !ko || ko === MISSING_TRANSLATION_TEXT || ko.startsWith("번역 없음") || ko.startsWith("자동 번역 실패");
+  }
+
+  async function autoTranslateToKorean(text) {
+    const clean = cleanImportText(text);
+    if (!clean) return { text: MISSING_TRANSLATION_TEXT, fallback: true };
+
+    const cached = readTranslationCache(clean);
+    if (cached) return { text: cached, fallback: false };
+
+    const builtin = await translateWithBuiltInApi(clean);
+    if (builtin) {
+      writeTranslationCache(clean, builtin);
+      return { text: builtin, fallback: false };
+    }
+
+    if (state.settings.externalAutoTranslate) {
+      const external = await translateWithGoogleEndpoint(clean);
+      if (external) {
+        writeTranslationCache(clean, external);
+        return { text: external, fallback: false };
+      }
+    }
+
+    return {
+      text: "자동 번역 실패 - 원문과 아래 핵심 표현을 먼저 확인해 주세요.",
+      fallback: true
+    };
+  }
+
+  async function translateWithBuiltInApi(text) {
+    try {
+      const translatorApi = window.Translator || window.ai?.translator;
+      if (!translatorApi?.create) return "";
+      const translator = await translatorApi.create({ sourceLanguage: "en", targetLanguage: "ko" });
+      const result = await translator.translate(text);
+      return cleanImportText(result);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  async function translateWithGoogleEndpoint(text) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q=${encodeURIComponent(text)}`;
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) return "";
+      const json = await res.json();
+      const translated = Array.isArray(json?.[0])
+        ? json[0].map(part => part?.[0] || "").join("")
+        : "";
+      return cleanImportText(translated);
+    } catch (e) {
+      return "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function readTranslationCache(text) {
+    try {
+      const cache = JSON.parse(localStorage.getItem(TRANSLATION_CACHE_KEY) || "{}");
+      return cache[translationCacheKey(text)] || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function writeTranslationCache(text, ko) {
+    try {
+      const cache = JSON.parse(localStorage.getItem(TRANSLATION_CACHE_KEY) || "{}");
+      cache[translationCacheKey(text)] = ko;
+      const entries = Object.entries(cache).slice(-300);
+      localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    } catch (e) {
+      // 캐시 저장 실패는 학습 흐름을 막지 않습니다.
+    }
+  }
+
+  function translationCacheKey(text) {
+    return cleanImportText(text).toLowerCase().slice(0, 240);
+  }
+
+  function buildAutoStudyNotes(en, ko) {
+    const words = buildAutoVocabulary(en);
+    const structure = buildAutoStructureNotes(en);
+    const mustMemorize = buildAutoMemorizeNotes(en, ko);
+    const notes = {};
+    if (words.length > 0) notes.words = words;
+    if (structure) notes.structure = structure;
+    if (mustMemorize) notes.mustMemorize = mustMemorize;
+    return Object.keys(notes).length > 0 ? notes : null;
+  }
+
+  function buildAutoVocabulary(en) {
+    const lower = ` ${cleanImportText(en).toLowerCase()} `;
+    const found = [];
+
+    PHRASE_MEANINGS
+      .sort((a, b) => b[0].length - a[0].length)
+      .forEach(([phrase, meaning]) => {
+        if (found.length >= 8) return;
+        const pattern = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, "i");
+        if (pattern.test(lower)) found.push({ word: phrase, meaning });
+      });
+
+    const tokens = cleanImportText(en).toLowerCase().match(/[a-z][a-z'-]{2,}/g) || [];
+    const seen = new Set(found.map(item => item.word.toLowerCase()));
+    tokens.forEach(token => {
+      const base = normalizeWordToken(token);
+      if (found.length >= 10 || seen.has(base) || STOP_WORDS.has(base)) return;
+      const meaning = WORD_MEANINGS[base];
+      if (meaning) {
+        found.push({ word: base, meaning });
+        seen.add(base);
+      }
+    });
+
+    tokens.forEach(token => {
+      const base = normalizeWordToken(token);
+      if (found.length >= 8 || seen.has(base) || STOP_WORDS.has(base) || base.length < 7) return;
+      found.push({ word: base, meaning: "문맥상 핵심어 - 사전에서 정확한 뜻을 확인해 보세요." });
+      seen.add(base);
+    });
+
+    return found;
+  }
+
+  function normalizeWordToken(token) {
+    let word = token.toLowerCase().replace(/^'+|'+$/g, "");
+    if (WORD_MEANINGS[word]) return word;
+    if (word.endsWith("ies") && WORD_MEANINGS[`${word.slice(0, -3)}y`]) return `${word.slice(0, -3)}y`;
+    if (word.endsWith("ing") && WORD_MEANINGS[word.slice(0, -3)]) return word.slice(0, -3);
+    if (word.endsWith("ed") && WORD_MEANINGS[word.slice(0, -2)]) return word.slice(0, -2);
+    if (word.endsWith("s") && WORD_MEANINGS[word.slice(0, -1)]) return word.slice(0, -1);
+    return word;
+  }
+
+  function buildAutoStructureNotes(en) {
+    const text = cleanImportText(en);
+    const lower = text.toLowerCase();
+    const notes = [];
+
+    if (/^to\s+[a-z]/i.test(text)) notes.push("문장 앞 <strong>To + 동사원형</strong>은 목적을 나타내며 '~하기 위해서'로 해석할 수 있습니다.");
+    if (/\bwithout\s+\w+/i.test(text)) notes.push("<strong>without + 명사/동명사</strong>는 '~없이'라는 조건을 만듭니다.");
+    if (/[—–-]/.test(text)) notes.push("대시(—) 뒤 표현은 앞 내용을 강조하거나 보충 설명하는 역할을 합니다.");
+    if (/\bif\b/i.test(text)) notes.push("<strong>If</strong>는 조건을 열어 주며, 뒤 절이 '만약 ~라면'의 기준이 됩니다.");
+    if (/\bbecause\b/i.test(text)) notes.push("<strong>because</strong> 뒤에는 이유가 이어집니다.");
+    if (/\b(which|who|that)\b/i.test(text)) notes.push("<strong>which/who/that</strong>은 앞 명사를 설명하거나 문장 내용을 확장합니다.");
+    if (/\b(should|could|would|might|must)\b/i.test(text)) notes.push("조동사는 말의 강도와 뉘앙스를 조절합니다. should는 제안, could는 가능성, must는 강한 필요를 나타냅니다.");
+    if (/\bwant(?:s|ed)?\s+to\b/i.test(text)) notes.push("<strong>want to + 동사원형</strong>은 '~하고 싶다/원하다'의 기본 패턴입니다.");
+    if (/\bgoing to\b/i.test(text)) notes.push("<strong>be going to</strong>는 앞으로의 계획이나 예상되는 변화를 말할 때 씁니다.");
+
+    if (notes.length === 0 && lower.split(/\s+/).length >= 8) {
+      notes.push("긴 문장은 핵심 동사와 전치사구를 먼저 나누어 읽으면 의미를 더 쉽게 잡을 수 있습니다.");
+    }
+
+    return notes.length > 0 ? bulletJoin(notes.slice(0, 3)) : "";
+  }
+
+  function buildAutoMemorizeNotes(en, ko) {
+    const lower = cleanImportText(en).toLowerCase();
+    const notes = [];
+
+    PHRASE_MEANINGS.forEach(([phrase, meaning]) => {
+      if (notes.length >= 3) return;
+      const pattern = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, "i");
+      if (pattern.test(lower)) notes.push(`<strong>${phrase}</strong>: ${meaning}`);
+    });
+
+    if (needsTranslation({ ko })) {
+      notes.push("자동 번역이 실패한 문장입니다. 단어 설명과 온라인 사전을 함께 보며 의미를 확인해 주세요.");
+    }
+
+    return notes.length > 0 ? bulletJoin(notes) : "";
+  }
+
+  function mergeStudyNotes(existing, autoNotes) {
+    if (!existing && !autoNotes) return null;
+    if (!existing) return autoNotes;
+    if (!autoNotes) return existing;
+
+    const merged = { ...existing };
+    const existingWords = Array.isArray(existing.words) ? existing.words : [];
+    const autoWords = Array.isArray(autoNotes.words) ? autoNotes.words : [];
+    const knownWords = new Set(existingWords.map(item => String(item.word || "").toLowerCase()));
+    const addedWords = autoWords.filter(item => !knownWords.has(String(item.word || "").toLowerCase()));
+    if (existingWords.length > 0 || addedWords.length > 0) {
+      merged.words = [...existingWords, ...addedWords].slice(0, 12);
+    }
+    if (!merged.structure && autoNotes.structure) merged.structure = autoNotes.structure;
+    if (!merged.mustMemorize && autoNotes.mustMemorize) merged.mustMemorize = autoNotes.mustMemorize;
+    if (!merged.pattern && autoNotes.pattern) merged.pattern = autoNotes.pattern;
+    return merged;
+  }
+
+  function notesWereAdded(before, after) {
+    if (!before && after) return true;
+    if (!before || !after) return false;
+    const beforeWords = Array.isArray(before.words) ? before.words.length : 0;
+    const afterWords = Array.isArray(after.words) ? after.words.length : 0;
+    return afterWords > beforeWords
+      || (!before.structure && !!after.structure)
+      || (!before.mustMemorize && !!after.mustMemorize)
+      || (!before.pattern && !!after.pattern);
+  }
+
+  async function mapWithConcurrency(items, limit, worker) {
+    const results = new Array(items.length);
+    let index = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (index < items.length) {
+        const current = index++;
+        results[current] = await worker(items[current], current);
+      }
+    });
+    await Promise.all(runners);
+    return results;
+  }
+
+  function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   // 2. JSON 파서
   function parseJsonDataset(jsonText) {
     const raw = JSON.parse(jsonText);
     if (!Array.isArray(raw)) throw new Error("JSON 루트 노드는 배열 객체여야 합니다.");
     return raw.map((item, idx) => {
-      if (!item.en || !item.ko) throw new Error(`${idx + 1}번째 문장에 'en' 또는 'ko' 필드가 누락되었습니다.`);
+      if (!item.en) throw new Error(`${idx + 1}번째 문장에 'en' 필드가 누락되었습니다.`);
       return {
         id: item.id || `json_${Date.now()}_${idx}`,
         speaker: item.speaker || "Speaker",
         en: item.en,
-        ko: item.ko,
+        ko: item.ko || MISSING_TRANSLATION_TEXT,
         notes: item.notes || null
       };
     });
@@ -1382,6 +1779,14 @@ document.addEventListener("DOMContentLoaded", () => {
           en: en,
           ko: ko,
           notes: parsedNotes
+        });
+      } else if (isEnglishCardLine(trimmed)) {
+        parsedData.push({
+          id: `pasted_${Date.now()}_${idx}`,
+          speaker: "Tutor",
+          en: trimmed,
+          ko: MISSING_TRANSLATION_TEXT,
+          notes: null
         });
       }
     });
@@ -1520,14 +1925,17 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const enrichResult = await enrichImportedDataset(rawParsed);
+    const enrichedRaw = enrichResult.cards;
+
     // 임포트 시점에 분량 최적화 알고리즘 적용 (원본은 rawData로 보존 → 분량 재조정 가능)
     const density = state.settings.cardDensity;
-    const data = segmentDataset(rawParsed, density);
+    const data = segmentDataset(enrichedRaw, density);
 
     const fileId = `file_${Date.now()}`;
     const now = Date.now();
-    const fileObj = { title, rawData: rawParsed, data, density, createdAt: now, updatedAt: now };
-    state.customFiles[fileId] = { title, rawData: rawParsed, data, density, createdAt: now, updatedAt: now };
+    const fileObj = { title, rawData: enrichedRaw, data, density, createdAt: now, updatedAt: now };
+    state.customFiles[fileId] = { title, rawData: enrichedRaw, data, density, createdAt: now, updatedAt: now };
 
     const ok = await saveCustomFile(fileId, fileObj);
     if (!ok) {
@@ -1545,8 +1953,21 @@ document.addEventListener("DOMContentLoaded", () => {
     populateFileDropdown();
     renderCurrentSentence();
 
-    alert(`성공! [${title}]\n원문 ${rawParsed.length}개 → 분량 최적화 후 ${data.length}개 카드로 구성되었습니다.`);
+    const enrichLine = state.settings.autoEnrichImports
+      ? `\n자동 보강: 번역 ${enrichResult.translated}개, 단어/설명 ${enrichResult.notesAdded}개${enrichResult.fallbackTranslations ? `, 번역 실패 ${enrichResult.fallbackTranslations}개` : ""}`
+      : "";
+    alert(`성공! [${title}]\n원문 ${rawParsed.length}개 → 분량 최적화 후 ${data.length}개 카드로 구성되었습니다.${enrichLine}`);
     closeSettings();
+  }
+
+  function setImportBusy(isBusy, label = "자동 보강 중…") {
+    if (textSubmitBtn) {
+      textSubmitBtn.disabled = isBusy;
+      textSubmitBtn.textContent = isBusy ? label : "나만의 카드 만들기";
+    }
+    if (fileUploadInput) {
+      fileUploadInput.disabled = isBusy;
+    }
   }
 
   // ── 이벤트 핸들러 바인딩 ──
@@ -1660,6 +2081,25 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
+    // 설정: 업로드 자동 보강
+    if (autoEnrichToggle) {
+      autoEnrichToggle.addEventListener("change", (e) => {
+        state.settings.autoEnrichImports = e.target.checked;
+        if (externalTranslateToggle) {
+          externalTranslateToggle.disabled = !state.settings.autoEnrichImports;
+        }
+        saveSettingsToStorage();
+      });
+    }
+
+    // 설정: 번역 누락 시 외부 자동 번역 사용
+    if (externalTranslateToggle) {
+      externalTranslateToggle.addEventListener("change", (e) => {
+        state.settings.externalAutoTranslate = e.target.checked;
+        saveSettingsToStorage();
+      });
+    }
+
     popupClose.addEventListener("click", hideWordPopup);
 
     // 파일 업로드
@@ -1667,24 +2107,31 @@ document.addEventListener("DOMContentLoaded", () => {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = function (evt) {
+      reader.onload = async function (evt) {
         const text = evt.target.result;
         const name = file.name;
+        setImportBusy(true, "업로드 보강 중…");
         try {
           const lowerName = name.toLowerCase();
           if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) {
             const parsed = parseHtmlTranscript(text, name);
-            loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
+            await loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           } else if (lowerName.endsWith(".json")) {
             const parsed = parseJsonDataset(text);
-            loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
+            await loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           } else {
             const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, name) : parseRawText(text);
-            loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
+            await loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           }
         } catch (err) {
           alert(`파일 파싱에 실패했습니다:\n${err.message}`);
+        } finally {
+          setImportBusy(false);
         }
+      };
+      reader.onerror = () => {
+        setImportBusy(false);
+        alert("파일을 읽는 중 오류가 발생했습니다.");
       };
       reader.readAsText(file);
       // 같은 파일 재선택 가능하도록 초기화
@@ -1692,22 +2139,25 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // 직접 붙여넣기
-    textSubmitBtn.addEventListener("click", () => {
+    textSubmitBtn.addEventListener("click", async () => {
       const text = textPasteArea.value.trim();
       if (!text) {
         alert("붙여넣을 텍스트 내용을 입력해 주세요.");
         return;
       }
+      setImportBusy(true);
       try {
         const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, "직접입력_HTML") : parseRawText(text);
         if (parsed.length === 0) {
           alert("파싱에 실패했습니다. HTML 문서 또는 '영어 문장 | 한국어 번역 | 단어1=뜻;단어2=뜻' 형식인지 확인해 주세요.");
           return;
         }
-        loadAndActivateNewDataset(`직접 입력 카드 (${parsed.length}문장)`, parsed);
+        await loadAndActivateNewDataset(`직접 입력 카드 (${parsed.length}문장)`, parsed);
         textPasteArea.value = "";
       } catch (err) {
         alert(`텍스트 파싱 오류: ${err.message}`);
+      } finally {
+        setImportBusy(false);
       }
     });
 

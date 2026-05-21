@@ -187,6 +187,27 @@
           </div>
         </div>
 
+        <!-- 7. 업로드 자동 보강 설정 -->
+        <div class="setting-group">
+          <div class="setting-row">
+            <span>업로드 시 번역·단어 설명 자동 보강</span>
+            <label class="switch">
+              <input type="checkbox" id="auto-enrich-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row" style="margin-top: 10px;">
+            <span>번역 없는 문장은 외부 자동 번역 사용</span>
+            <label class="switch">
+              <input type="checkbox" id="external-translate-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.5;">
+            * 이미 번역/설명이 있는 HTML은 그대로 보존합니다. 번역이 없는 영어 문장은 문장 단위로 자동 번역을 시도하고, 핵심 단어·구문 설명은 앱 안에서 보강합니다.
+          </div>
+        </div>
+
         <!-- ── 영어 학습 문장 파일 입력 및 임포트 ── -->
         <div class="setting-group" style="margin-top: 10px; padding-top: 20px; border-top: 1px solid var(--border-color);">
           <label>학습용 새 영어 파일 가져오기</label>
@@ -209,7 +230,7 @@
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v1.2.2 · Smartphone English Study PWA<br>
+          영한번역 v1.3.0 · Smartphone English Study PWA<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>
       </div>
