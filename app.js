@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.2.0 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / 이벤트 위임
+ * v1.2.1 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 입력 살균 / HTML 임포트 보강
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -874,43 +874,256 @@ document.addEventListener("DOMContentLoaded", () => {
   // 외부 학습용 영어 파일 파서
   // ───────────────────────────────────────────────────────────
 
-  // 1. HTML 파서 (data-speaker 우선, 없으면 번갈아 폴백)
+  // 1. HTML 파서
+  //    - 전용 dialogue-block 형식 우선
+  //    - 일반 HTML 문서의 문단/목록/표 셀도 EN/KO 순서로 자동 페어링
+  //    - 한국어 번역이 없는 영어 HTML은 영어 전용 카드로 가져오기
   function parseHtmlTranscript(htmlText, fileName) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlText, "text/html");
-    const blocks = doc.querySelectorAll(".dialogue-block");
+    const idPrefix = safeImportIdPrefix(fileName);
+
+    const structured = parseStructuredDialogueBlocks(doc, idPrefix);
+    if (structured.length > 0) return structured;
+
+    const loose = parseLooseHtmlText(doc, idPrefix);
+    if (loose.length > 0) return loose;
+
+    return parseEnglishOnlyHtml(doc, idPrefix);
+  }
+
+  function parseStructuredDialogueBlocks(doc, idPrefix) {
+    const blocks = Array.from(doc.querySelectorAll(".dialogue-block"));
     const parsedData = [];
 
-    let lastEnText = "";
-    let pendingSpeaker = "";
+    let pending = null;
 
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
-      const enTextEl = block.querySelector(".en-text");
-      const koTextEl = block.querySelector(".ko-text");
-      const dsAttr = block.getAttribute("data-speaker");
+      const enText = cleanImportText(block.querySelector(".en-text")?.textContent || "");
+      const koText = cleanImportText(block.querySelector(".ko-text")?.textContent || "");
+      const speaker = readImportSpeaker(block, parsedData.length);
 
-      if (enTextEl) {
-        lastEnText = enTextEl.textContent.trim();
-        pendingSpeaker = dsAttr ? dsAttr.trim() : "";
-      } else if (koTextEl && lastEnText) {
-        const cleanKoText = koTextEl.textContent.trim();
-        const koSpeaker = dsAttr ? dsAttr.trim() : "";
-        const id = `custom_${fileName.replace(/[^a-z0-9]/gi, "_")}_${parsedData.length}`;
-
-        // data-speaker 우선 (EN 블록 → KO 블록 순), 없으면 번갈아 추정
-        let speaker = pendingSpeaker || koSpeaker;
-        if (!speaker) {
-          speaker = (parsedData.length % 2 === 0) ? "Rishi Sunak" : "Elon Musk";
-        }
-
-        parsedData.push({ id, speaker, en: lastEnText, ko: cleanKoText, notes: null });
-        lastEnText = "";
-        pendingSpeaker = "";
+      if (enText && koText) {
+        parsedData.push(makeImportedCard(idPrefix, parsedData.length, speaker, enText, koText));
+        pending = null;
+      } else if (enText) {
+        pending = { speaker, en: enText };
+      } else if (koText && pending) {
+        parsedData.push(makeImportedCard(idPrefix, parsedData.length, pending.speaker || speaker, pending.en, koText));
+        pending = null;
       }
     }
 
     return parsedData;
+  }
+
+  function parseLooseHtmlText(doc, idPrefix) {
+    const directEntries = [];
+    const selector = [
+      ".en-text", ".english", ".eng", "[lang^='en']", "[data-lang='en']",
+      ".ko-text", ".korean", ".kor", "[lang^='ko']", "[data-lang='ko']"
+    ].join(",");
+
+    Array.from(doc.querySelectorAll(selector)).forEach(el => {
+      const text = cleanImportText(el.textContent || "");
+      if (isImportNoise(text)) return;
+      const lang = detectImportLanguage(text, el);
+      if (lang === "en" || lang === "ko") {
+        directEntries.push({ lang, text, speaker: readImportSpeaker(el, directEntries.length) });
+      }
+    });
+
+    const fromDirect = pairImportEntries(directEntries, idPrefix);
+    if (fromDirect.length > 0) return fromDirect;
+
+    const entries = [];
+    const pairedLines = [];
+    collectReadableHtmlLines(doc).forEach((line, index) => {
+      const pair = splitInlineImportPair(line);
+      if (pair) {
+        pairedLines.push(makeImportedCard(idPrefix, pairedLines.length, "Tutor", pair.en, pair.ko));
+        return;
+      }
+
+      const extracted = extractSpeakerPrefix(line);
+      const lang = detectImportLanguage(extracted.text);
+      if (lang === "en" || lang === "ko") {
+        entries.push({
+          lang,
+          text: extracted.text,
+          speaker: extracted.speaker || (index % 2 === 0 ? "Speaker A" : "Speaker B")
+        });
+      }
+    });
+
+    return [...pairedLines, ...pairImportEntries(entries, idPrefix, pairedLines.length)];
+  }
+
+  function parseEnglishOnlyHtml(doc, idPrefix) {
+    const seen = new Set();
+    const cards = [];
+
+    collectReadableHtmlLines(doc).forEach(line => {
+      const extracted = extractSpeakerPrefix(line);
+      const text = extracted.text;
+      if (detectImportLanguage(text) !== "en") return;
+
+      const chunks = splitIntoSentences(text);
+      chunks.forEach(chunk => {
+        const clean = cleanImportText(chunk);
+        if (clean.length < 12 || seen.has(clean.toLowerCase())) return;
+        seen.add(clean.toLowerCase());
+        cards.push(makeImportedCard(
+          idPrefix,
+          cards.length,
+          extracted.speaker || "Speaker",
+          clean,
+          "번역 없음 - 영어 원문만 가져왔습니다."
+        ));
+      });
+    });
+
+    return cards;
+  }
+
+  function collectReadableHtmlLines(doc) {
+    const root = doc.body || doc;
+    Array.from(root.querySelectorAll("script, style, noscript, svg, canvas, audio, video")).forEach(el => el.remove());
+
+    const blocks = Array.from(root.querySelectorAll("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div.dialogue-text"));
+    const lines = blocks
+      .map(el => cleanImportText(el.textContent || ""))
+      .filter(text => !isImportNoise(text));
+
+    if (lines.length > 0) return uniqueImportLines(lines);
+
+    const fallback = cleanImportText(root.textContent || "");
+    return fallback ? uniqueImportLines(splitIntoSentences(fallback).filter(text => !isImportNoise(text))) : [];
+  }
+
+  function pairImportEntries(entries, idPrefix, offset = 0) {
+    const parsedData = [];
+    let pending = null;
+
+    entries.forEach(entry => {
+      if (entry.lang === "en") {
+        pending = entry;
+      } else if (entry.lang === "ko" && pending) {
+        parsedData.push(makeImportedCard(
+          idPrefix,
+          offset + parsedData.length,
+          pending.speaker || entry.speaker,
+          pending.text,
+          entry.text
+        ));
+        pending = null;
+      }
+    });
+
+    return parsedData;
+  }
+
+  function splitInlineImportPair(line) {
+    const candidates = line.includes("|")
+      ? line.split("|")
+      : line.includes("::")
+        ? line.split("::")
+        : null;
+
+    if (candidates && candidates.length >= 2) {
+      const en = cleanImportText(candidates[0]);
+      const ko = cleanImportText(candidates.slice(1).join(" "));
+      if (detectImportLanguage(en) === "en" && detectImportLanguage(ko) === "ko") return { en, ko };
+    }
+
+    const koreanStart = line.search(/[가-힣]/);
+    if (koreanStart > 10) {
+      const en = cleanImportText(line.slice(0, koreanStart).replace(/[-–—:：/]+$/, ""));
+      const ko = cleanImportText(line.slice(koreanStart));
+      if (detectImportLanguage(en) === "en" && detectImportLanguage(ko) === "ko") return { en, ko };
+    }
+
+    return null;
+  }
+
+  function extractSpeakerPrefix(line) {
+    const match = line.match(/^([A-Z][A-Za-z .'-]{0,40}|[A-D]|Q|A|Speaker\s*\d+)\s*[:：]\s*(.+)$/);
+    if (!match) return { speaker: "", text: line };
+    return { speaker: match[1].trim(), text: cleanImportText(match[2]) };
+  }
+
+  function detectImportLanguage(text, el) {
+    const meta = el
+      ? `${el.className || ""} ${el.getAttribute("lang") || ""} ${el.getAttribute("data-lang") || ""}`.toLowerCase()
+      : "";
+    if (/\b(en|eng|english|en-text)\b/.test(meta)) return "en";
+    if (/\b(ko|kor|korean|ko-text)\b/.test(meta)) return "ko";
+
+    const koreanCount = (text.match(/[가-힣]/g) || []).length;
+    const englishCount = (text.match(/[A-Za-z]/g) || []).length;
+    if (englishCount >= 3 && koreanCount === 0) return "en";
+    if (koreanCount >= 2 && englishCount < 12) return "ko";
+    if (koreanCount >= 8 && koreanCount > englishCount / 2) return "ko";
+    return "mixed";
+  }
+
+  function readImportSpeaker(el, index) {
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      const speaker = cur.getAttribute("data-speaker") || cur.getAttribute("data-name") || cur.getAttribute("aria-label");
+      if (speaker && cleanImportText(speaker)) return cleanImportText(speaker);
+      cur = cur.parentElement;
+    }
+    return index % 2 === 0 ? "Speaker A" : "Speaker B";
+  }
+
+  function makeImportedCard(idPrefix, index, speaker, en, ko, notes = null) {
+    return {
+      id: `custom_${idPrefix}_${index}`,
+      speaker: speaker || "Speaker",
+      en: cleanImportText(en),
+      ko: cleanImportText(ko),
+      notes
+    };
+  }
+
+  function safeImportIdPrefix(fileName) {
+    return String(fileName || "html")
+      .replace(/\.[^/.]+$/, "")
+      .replace(/[^a-z0-9가-힣]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48) || "html";
+  }
+
+  function cleanImportText(text) {
+    return String(text || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function looksLikeHtml(text) {
+    return /<\s*(?:!doctype|html|body|main|article|section|div|p|span|table|ul|ol|li)\b/i.test(String(text || ""));
+  }
+
+  function uniqueImportLines(lines) {
+    const seen = new Set();
+    return lines.filter(line => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function isImportNoise(text) {
+    const clean = cleanImportText(text);
+    if (clean.length < 4) return true;
+    if (/^\[\d{1,2}:\d{2}/.test(clean)) return true;
+    if (/^(contents|table of contents|full transcript|part\s*\d+|목차|대담 전문|영어 원문|한국어 번역)$/i.test(clean)) return true;
+    if (!/[A-Za-z가-힣]/.test(clean)) return true;
+    return false;
   }
 
   // 2. JSON 파서
@@ -981,9 +1194,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── 새 학습 리스트 저장 및 활성화 ──
   // ───────────────────────────────────────────────────────────
   // 분량 최적화(휴리스틱 청킹) — 임포트 시 카드 단위를 학습하기 좋은 크기로 재구성
-  //  · 무료/오프라인 휴리스틱 (네트워크·비용 없음)
-  //  · 정책: "병합 위주 + 보수적 분할" (EN·KO 문장 수가 1:1로 맞을 때만 분할하여 번역 어긋남 방지)
-  //  · 화자(speaker) 경계는 절대 넘지 않음, 중요 노트가 있는 카드는 독립 유지
+  //  · 스마트 청킹 알고리즘 적용 (맥락, 내용, 중요도, 구분성, 학습자의 편의성 고려)
   // ───────────────────────────────────────────────────────────
 
   // 카드 분량 예산(목표 단어 수 근사치)
@@ -1262,14 +1473,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const text = evt.target.result;
         const name = file.name;
         try {
-          if (name.endsWith(".html") || name.endsWith(".htm")) {
+          const lowerName = name.toLowerCase();
+          if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) {
             const parsed = parseHtmlTranscript(text, name);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
-          } else if (name.endsWith(".json")) {
+          } else if (lowerName.endsWith(".json")) {
             const parsed = parseJsonDataset(text);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           } else {
-            const parsed = parseRawText(text);
+            const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, name) : parseRawText(text);
             loadAndActivateNewDataset(name.replace(/\.[^/.]+$/, ""), parsed);
           }
         } catch (err) {
@@ -1289,9 +1501,9 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       try {
-        const parsed = parseRawText(text);
+        const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, "직접입력_HTML") : parseRawText(text);
         if (parsed.length === 0) {
-          alert("파싱에 실패했습니다. 포맷 예시: '영어 문장 | 한국어 번역 | 단어1=뜻;단어2=뜻' 형식을 유지해 주세요.");
+          alert("파싱에 실패했습니다. HTML 문서 또는 '영어 문장 | 한국어 번역 | 단어1=뜻;단어2=뜻' 형식인지 확인해 주세요.");
           return;
         }
         loadAndActivateNewDataset(`직접 입력 카드 (${parsed.length}문장)`, parsed);
