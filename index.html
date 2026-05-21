@@ -223,14 +223,20 @@
             </div>
 
             <!-- 방법 B: 직접 복사 붙여넣기 -->
-            <textarea id="text-paste" class="text-paste-area" placeholder="[형식 예시: 영어 문장 | 한국어 번역 | 단어=뜻;단어2=뜻]&#10;여기에 텍스트를 붙여넣어 카드를 바로 추가해 보세요."></textarea>
-            <button id="text-submit-btn" class="submit-btn">나만의 카드 만들기</button>
+            <div style="font-size: 12px; color: var(--text-main); font-weight: 700; margin-top: 8px;">
+              영문 텍스트 직접 붙여넣기
+            </div>
+            <textarea id="text-paste" class="text-paste-area" placeholder="영문 기사, 대본, 문단을 그대로 붙여넣으세요.&#10;예: Tesla is expanding its energy business. Customers want faster launch schedules.&#10;&#10;번역이 있으면 기존 형식도 가능:&#10;영어 문장 | 한국어 번역 | 단어=뜻;단어2=뜻"></textarea>
+            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">
+              * 순수 영문만 붙여넣어도 문장별 카드로 나누고, 번역·단어 설명을 자동 보강합니다.
+            </div>
+            <button id="text-submit-btn" class="submit-btn">영문 텍스트로 카드 만들기</button>
           </div>
         </div>
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v1.3.0 · Smartphone English Study PWA<br>
+          영한번역 v1.3.1 · Smartphone English Study PWA<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>
       </div>

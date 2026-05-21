@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.0 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 업로드 자동 번역·설명 보강
+ * v1.3.1 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 영문 텍스트 직접 붙여넣기
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -1741,6 +1741,21 @@ document.addEventListener("DOMContentLoaded", () => {
   function parseRawText(rawText) {
     const lines = rawText.split("\n");
     const parsedData = [];
+    const plainEnglishLines = [];
+
+    const flushPlainEnglish = () => {
+      if (plainEnglishLines.length === 0) return;
+      splitPlainEnglishText(plainEnglishLines.join("\n")).forEach((en, offset) => {
+        parsedData.push({
+          id: `pasted_en_${Date.now()}_${parsedData.length}_${offset}`,
+          speaker: "Tutor",
+          en,
+          ko: MISSING_TRANSLATION_TEXT,
+          notes: null
+        });
+      });
+      plainEnglishLines.length = 0;
+    };
 
     lines.forEach((line, idx) => {
       const trimmed = line.trim();
@@ -1754,6 +1769,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (parts.length >= 2) {
+        flushPlainEnglish();
         const en = parts[0].trim();
         const ko = parts[1].trim();
         const noteText = parts[2] ? parts[2].trim() : "";
@@ -1781,17 +1797,35 @@ document.addEventListener("DOMContentLoaded", () => {
           notes: parsedNotes
         });
       } else if (isEnglishCardLine(trimmed)) {
-        parsedData.push({
-          id: `pasted_${Date.now()}_${idx}`,
-          speaker: "Tutor",
-          en: trimmed,
-          ko: MISSING_TRANSLATION_TEXT,
-          notes: null
-        });
+        plainEnglishLines.push(trimmed);
       }
     });
 
+    flushPlainEnglish();
     return parsedData;
+  }
+
+  function splitPlainEnglishText(text) {
+    const seen = new Set();
+    const cards = [];
+    const chunks = String(text || "")
+      .replace(/\r/g, "\n")
+      .split(/\n{2,}|(?=\n\s*[-•*]\s+)/)
+      .map(block => cleanImportText(block.replace(/^[-•*]\s*/gm, "")))
+      .filter(Boolean);
+
+    chunks.forEach(chunk => {
+      const sentences = splitIntoSentences(chunk);
+      sentences.forEach(sentence => {
+        const clean = cleanImportText(sentence);
+        const key = clean.toLowerCase();
+        if (!isEnglishCardLine(clean) || seen.has(key)) return;
+        seen.add(key);
+        cards.push(clean);
+      });
+    });
+
+    return cards;
   }
 
   // ── 새 학습 리스트 저장 및 활성화 ──
@@ -1963,7 +1997,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function setImportBusy(isBusy, label = "자동 보강 중…") {
     if (textSubmitBtn) {
       textSubmitBtn.disabled = isBusy;
-      textSubmitBtn.textContent = isBusy ? label : "나만의 카드 만들기";
+      textSubmitBtn.textContent = isBusy ? label : "영문 텍스트로 카드 만들기";
     }
     if (fileUploadInput) {
       fileUploadInput.disabled = isBusy;
