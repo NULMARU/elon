@@ -136,6 +136,18 @@
           </div>
         </div>
 
+        <!-- 2-1. 카드 분량 (한 페이지에 담는 영어 분량) -->
+        <div class="setting-group">
+          <label>한 페이지 분량 (가져온 파일에 적용)</label>
+          <div class="slider-container">
+            <input type="range" id="card-density-slider" class="range-slider" min="0" max="2" step="1" value="1">
+            <span id="card-density-val" class="slider-val">보통</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px;">
+            * 문장 길이·맥락·화자를 고려해 카드 크기를 자동 조정합니다. 기본 인터뷰에는 적용되지 않습니다.
+          </div>
+        </div>
+
         <!-- 3. 발음 듣기 속도 -->
         <div class="setting-group">
           <label>영어 듣기 재생 배속</label>

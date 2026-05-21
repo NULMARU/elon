@@ -18,7 +18,8 @@ document.addEventListener("DOMContentLoaded", () => {
       ttsSpeed: 1.0,
       ttsVoice: "",
       autoPlay: false,
-      alwaysShowTranslation: true
+      alwaysShowTranslation: true,
+      cardDensity: "medium"        // 카드 분량: "short" | "medium" | "long" (임포트 시 청킹 기준)
     },
     // 사용자 추가 파일 메모리 캐시 { id: { title, data:[...], createdAt, updatedAt } }
     // 진실 원본(source of truth)은 IndexedDB (미지원 시 localStorage 폴백)
@@ -64,6 +65,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const voiceSelect = document.getElementById("voice-select");
   const autoPlayToggle = document.getElementById("autoplay-toggle");
   const alwaysShowToggle = document.getElementById("always-show-toggle");
+  const cardDensitySlider = document.getElementById("card-density-slider");
+  const cardDensityVal = document.getElementById("card-density-val");
 
   // 파일 추가 입력기
   const fileUploadInput = document.getElementById("file-upload");
@@ -163,7 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const arr = await FilesDB.listFiles();
         const map = {};
         arr.forEach(f => {
-          map[f.id] = { title: f.title, data: f.data, createdAt: f.createdAt, updatedAt: f.updatedAt };
+          map[f.id] = { title: f.title, data: f.data, rawData: f.rawData || null, density: f.density || null, createdAt: f.createdAt, updatedAt: f.updatedAt };
         });
         return map;
       } catch (e) {
@@ -274,6 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ttsSpeedSlider.value = state.settings.ttsSpeed;
       ttsSpeedVal.textContent = `${Number(state.settings.ttsSpeed).toFixed(2)}x`;
     }
+    syncDensityUI();
 
     setupTTSVoices();
     if (typeof speechSynthesis !== "undefined" && window.speechSynthesis.onvoiceschanged !== undefined) {
@@ -304,6 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedTtsVoice = localStorage.getItem("yh_ttsVoice") || "";
       const savedAutoPlay = localStorage.getItem("yh_autoPlay") === "true";
       const savedAlwaysShow = localStorage.getItem("yh_alwaysShow") !== "false"; // 기본값 true
+      const savedDensity = localStorage.getItem("yh_cardDensity") || "medium";
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
       const savedMode = localStorage.getItem("yh_mode") === "starred" ? "starred" : "all";
 
@@ -316,7 +321,8 @@ document.addEventListener("DOMContentLoaded", () => {
         ttsSpeed: savedTtsSpeed,
         ttsVoice: savedTtsVoice,
         autoPlay: savedAutoPlay,
-        alwaysShowTranslation: savedAlwaysShow
+        alwaysShowTranslation: savedAlwaysShow,
+        cardDensity: (["short", "medium", "long"].includes(savedDensity) ? savedDensity : "medium")
       };
 
       state.currentFileId = savedCurrentFile;
@@ -336,6 +342,7 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("yh_ttsVoice", state.settings.ttsVoice);
       localStorage.setItem("yh_autoPlay", state.settings.autoPlay);
       localStorage.setItem("yh_alwaysShow", state.settings.alwaysShowTranslation);
+      localStorage.setItem("yh_cardDensity", state.settings.cardDensity);
     } catch (e) {
       console.error("설정 저장 실패:", e);
     }
@@ -972,16 +979,146 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── 새 학습 리스트 저장 및 활성화 ──
-  async function loadAndActivateNewDataset(title, data) {
-    if (!data || data.length === 0) {
+  // ───────────────────────────────────────────────────────────
+  // 분량 최적화(휴리스틱 청킹) — 임포트 시 카드 단위를 학습하기 좋은 크기로 재구성
+  //  · 무료/오프라인 휴리스틱 (네트워크·비용 없음)
+  //  · 정책: "병합 위주 + 보수적 분할" (EN·KO 문장 수가 1:1로 맞을 때만 분할하여 번역 어긋남 방지)
+  //  · 화자(speaker) 경계는 절대 넘지 않음, 중요 노트가 있는 카드는 독립 유지
+  // ───────────────────────────────────────────────────────────
+
+  // 카드 분량 예산(목표 단어 수 근사치)
+  const DENSITY_BUDGET = { short: 14, medium: 24, long: 38 };
+  const DENSITY_ORDER = ["short", "medium", "long"];
+  const DENSITY_LABEL = { short: "짧게", medium: "보통", long: "길게" };
+
+  function syncDensityUI() {
+    if (!cardDensitySlider) return;
+    const idx = DENSITY_ORDER.indexOf(state.settings.cardDensity);
+    cardDensitySlider.value = idx < 0 ? 1 : idx;
+    cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || "보통";
+  }
+
+  // 문장 분리: 영문 종결부호 + 닫는 인용부호 뒤 공백 기준. 약어/소수점은 최소 보호.
+  function splitIntoSentences(text) {
+    if (text == null) return [];
+    const s = String(text).trim();
+    if (!s) return [];
+    const marked = s
+      // 소수점(1.5) 보호
+      .replace(/(\d)\.(\d)/g, "$1$2")
+      // 종결부호(., ?, !) + 선택적 닫는 인용부호 뒤에 공백이 오면 분리 지점 표시
+      .replace(/([.?!]["”’']?)\s+/g, "$1");
+    const parts = marked.split("")
+      .map(p => p.replace(//g, ".").trim())
+      .filter(Boolean);
+    return parts.length ? parts : [s];
+  }
+
+  function countWords(en) {
+    const m = String(en || "").match(/[A-Za-z'-]+/g);
+    return m ? m.length : 0;
+  }
+
+  // 절(clause) 신호: 쉼표·세미콜론·접속사·관계사 → 구분성/복잡도 가중
+  function clauseSignals(en) {
+    const punct = (String(en || "").match(/[,;:]/g) || []).length;
+    const conj = (String(en || "").match(/\b(and|but|or|so|because|that|which|who|whom|whose|when|while|if|although|though|however)\b/gi) || []).length;
+    return punct + conj;
+  }
+
+  // 카드 인지 부하 추정치
+  function cardLoad(card) {
+    return countWords(card.en) + clauseSignals(card.en) * 1.5;
+  }
+
+  // 중요도: 필수 암기/패턴 노트가 있으면 독립 카드로 유지 선호
+  function isImportantCard(card) {
+    return !!(card.notes && (card.notes.mustMemorize || card.notes.pattern));
+  }
+
+  // 핵심 알고리즘: 원본 카드 배열 → 분량 최적화된 카드 배열 (원본 불변)
+  function segmentDataset(cards, density) {
+    if (!Array.isArray(cards)) return [];
+    const budget = DENSITY_BUDGET[density] || DENSITY_BUDGET.medium;
+
+    // 1단계: 보수적 분할 — 매우 긴 카드를 EN/KO 문장 수가 정확히 일치할 때만 문장 단위로 분할
+    const expanded = [];
+    cards.forEach(card => {
+      const load = cardLoad(card);
+      const enSents = splitIntoSentences(card.en);
+      const koSents = splitIntoSentences(card.ko);
+      const splittable = load > budget * 1.6 && enSents.length > 1 && enSents.length === koSents.length;
+      if (splittable) {
+        enSents.forEach((en, i) => {
+          expanded.push({
+            id: `${card.id}_s${i}`,
+            speaker: card.speaker,
+            en: en,
+            ko: koSents[i],
+            // 분할 시 노트는 정렬 보장이 안 되므로 첫 조각에만 유지
+            notes: i === 0 ? (card.notes || null) : null
+          });
+        });
+      } else {
+        // 원본 참조 유지(이후 병합 단계에서 복사하여 불변 보장)
+        expanded.push(card);
+      }
+    });
+
+    // 2단계: 병합 — 같은 화자의 연속 짧은 카드를 예산 내에서 합침
+    const merged = [];
+    for (const card of expanded) {
+      const last = merged[merged.length - 1];
+      const canMerge = last
+        && last.speaker === card.speaker
+        && !isImportantCard(last) && !isImportantCard(card)
+        && (cardLoad(last) + cardLoad(card)) <= budget;
+      if (canMerge) {
+        last.en = `${last.en} ${card.en}`.trim();
+        last.ko = `${last.ko} ${card.ko}`.trim();
+        if (!last.notes && card.notes) last.notes = card.notes;
+      } else {
+        // 새 카드는 복사본으로 push → 입력(cards/rawData) 불변 보장
+        merged.push({ id: card.id, speaker: card.speaker, en: card.en, ko: card.ko, notes: card.notes || null });
+      }
+    }
+    return merged;
+  }
+
+  // 분량 설정 변경 시 현재 커스텀 파일을 rawData로부터 재분할 (기본 교재는 큐레이션 유지)
+  async function reSegmentCurrentFile() {
+    const id = state.currentFileId;
+    if (id === "default_interview") return;
+    const f = state.customFiles[id];
+    if (!f || !f.rawData) return; // 구버전(원본 미보존) 파일은 재분할 불가
+    f.data = segmentDataset(f.rawData, state.settings.cardDensity);
+    f.density = state.settings.cardDensity;
+    f.updatedAt = Date.now();
+    state.currentIndex = 0;
+    state.progress[id] = 0;
+    await saveCustomFile(id, {
+      title: f.title, rawData: f.rawData, data: f.data,
+      density: f.density, createdAt: f.createdAt, updatedAt: f.updatedAt
+    });
+    saveStateToStorage();
+    populateFileDropdown();
+    renderCurrentSentence();
+  }
+
+  async function loadAndActivateNewDataset(title, rawParsed) {
+    if (!rawParsed || rawParsed.length === 0) {
       alert("파싱된 문장 데이터가 없습니다. 포맷을 다시 확인해 주세요.");
       return;
     }
 
+    // 임포트 시점에 분량 최적화 알고리즘 적용 (원본은 rawData로 보존 → 분량 재조정 가능)
+    const density = state.settings.cardDensity;
+    const data = segmentDataset(rawParsed, density);
+
     const fileId = `file_${Date.now()}`;
     const now = Date.now();
-    const fileObj = { title, data, createdAt: now, updatedAt: now };
-    state.customFiles[fileId] = { title, data, createdAt: now, updatedAt: now };
+    const fileObj = { title, rawData: rawParsed, data, density, createdAt: now, updatedAt: now };
+    state.customFiles[fileId] = { title, rawData: rawParsed, data, density, createdAt: now, updatedAt: now };
 
     const ok = await saveCustomFile(fileId, fileObj);
     if (!ok) {
@@ -999,7 +1136,7 @@ document.addEventListener("DOMContentLoaded", () => {
     populateFileDropdown();
     renderCurrentSentence();
 
-    alert(`성공! [${title}] 총 ${data.length}개 문장이 정상 업로드되었습니다.`);
+    alert(`성공! [${title}]\n원문 ${rawParsed.length}개 → 분량 최적화 후 ${data.length}개 카드로 구성되었습니다.`);
     closeSettings();
   }
 
@@ -1069,6 +1206,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const sizes = ["sm", "md", "lg", "xl"];
       setupFontSize(sizes[parseInt(e.target.value)]);
     });
+
+    // 설정: 카드 분량 (변경 시 현재 가져온 파일을 재분할)
+    if (cardDensitySlider) {
+      cardDensitySlider.addEventListener("change", (e) => {
+        const idx = parseInt(e.target.value);
+        state.settings.cardDensity = DENSITY_ORDER[idx] || "medium";
+        cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || "보통";
+        saveSettingsToStorage();
+        reSegmentCurrentFile();
+      });
+      cardDensitySlider.addEventListener("input", (e) => {
+        const idx = parseInt(e.target.value);
+        cardDensityVal.textContent = DENSITY_LABEL[DENSITY_ORDER[idx]] || "보통";
+      });
+    }
 
     // 설정: TTS 배속
     ttsSpeedSlider.addEventListener("input", (e) => {
