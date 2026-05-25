@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.5 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 핵심 웹문장 추출 정밀화
+ * v1.3.6 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 앱내 단어 뜻 보강
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -723,7 +723,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ${notes.words.map(w => `
             <div class="word-item">
               <span class="word-name">${escapeHtml(w.word)}</span>
-              <span class="word-meaning">${escapeHtml(w.meaning)}</span>
+              <span class="word-meaning">${escapeHtml(displayVocabularyMeaning(w.word, w.meaning))}</span>
               <a href="#" class="dict-link" data-word="${escapeHtml(String(w.word || "").toLowerCase())}">사전 🔍</a>
             </div>
           `).join("")}
@@ -1734,6 +1734,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ───────────────────────────────────────────────────────────
   const MISSING_TRANSLATION_TEXT = "번역 없음 - 영어 원문만 가져왔습니다.";
   const TRANSLATION_CACHE_KEY = "yh_translation_cache_v1";
+  const GENERIC_VOCABULARY_MEANING = "문맥상 핵심어 - 사전에서 정확한 뜻을 확인해 보세요.";
 
   const STOP_WORDS = new Set([
     "the", "a", "an", "and", "or", "but", "so", "to", "of", "in", "on", "at", "for", "from", "with", "without", "by",
@@ -1852,6 +1853,144 @@ document.addEventListener("DOMContentLoaded", () => {
     vehicle: "차량",
     vision: "비전",
     volume: "물량, 규모"
+  };
+
+  const WEB_WORD_MEANINGS = {
+    abrupt: "갑작스러운",
+    achieved: "달성한, 이룬",
+    advocate: "옹호자, 지지자",
+    advocates: "옹호자들",
+    advancement: "발전, 진보",
+    advances: "진전, 발전",
+    agi: "범용 인공지능",
+    anecdote: "일화, 사례",
+    application: "응용, 적용",
+    applications: "응용 서비스, 적용 분야",
+    argue: "주장하다",
+    argues: "주장하다",
+    artificial: "인공의",
+    backlash: "반발, 역풍",
+    bench: "인재층, 연구 기반",
+    benefit: "이익, 도움이 되다",
+    brilliant: "뛰어난, 훌륭한",
+    broader: "더 넓은, 더 폭넓은",
+    capable: "능력 있는",
+    cited: "언급했다, 인용했다",
+    chemistry: "화학",
+    civilization: "문명",
+    clearer: "더 명확한",
+    cofounder: "공동창업자",
+    "co-founder": "공동창업자",
+    competition: "경쟁",
+    competitor: "경쟁자",
+    competitors: "경쟁자들",
+    computing: "컴퓨팅, 계산 기술",
+    commencement: "졸업식, 시작",
+    consequence: "결과, 영향",
+    consequences: "결과, 영향",
+    consumer: "소비자",
+    corporate: "기업의",
+    cusp: "막 시작되는 지점, 문턱",
+    decline: "감소하다, 거절하다",
+    declaration: "선언, 발표",
+    deepmind: "구글의 AI 연구 조직 딥마인드",
+    demonstration: "시연, 증명",
+    demonstrations: "시연들, 증명 사례",
+    destructive: "파괴적인",
+    discovery: "발견",
+    discoveries: "발견들",
+    distinguish: "구별하다",
+    disruption: "혼란, 큰 변화",
+    dramatic: "극적인, 큰 폭의",
+    edge: "우위, 강점",
+    engineer: "엔지니어",
+    engineers: "엔지니어들",
+    expanded: "확장했다, 자세히 설명했다",
+    expert: "전문가",
+    extinction: "멸종, 소멸",
+    ferocious: "매우 치열한, 격렬한",
+    forecast: "예측, 전망",
+    fossil: "화석의",
+    foundation: "기반, 토대",
+    framing: "관점 설정, 틀 짜기",
+    freneticism: "분주함, 과열된 속도감",
+    fueled: "동력을 얻은, 촉발된",
+    global: "전 세계의",
+    gradual: "점진적인",
+    hype: "과장된 홍보, 과열된 관심",
+    honoree: "수상자, 영예를 받은 사람",
+    honorees: "수상자들",
+    humanity: "인류, 인간성",
+    ingenuity: "창의력, 기발함",
+    insight: "통찰",
+    insights: "통찰들",
+    intelligence: "지능",
+    keynote: "기조연설",
+    labs: "연구소들",
+    legit: "진짜의, 제대로 된",
+    material: "재료, 물질",
+    materials: "재료, 소재",
+    mathematics: "수학",
+    medicine: "의학, 약",
+    mitigating: "완화하는, 줄이는",
+    model: "모델, 방식",
+    models: "모델들, 방식들",
+    nobel: "노벨상의",
+    nod: "언급, 암시",
+    notion: "생각, 개념",
+    occupational: "직업상의",
+    onstage: "무대 위의",
+    organization: "조직",
+    organizations: "조직들",
+    overflowing: "넘쳐나는",
+    pandemic: "세계적 유행병",
+    pandemics: "세계적 유행병들",
+    peer: "동료, 같은 업계 사람",
+    peers: "동료들, 같은 업계 사람들",
+    persuasive: "설득력 있는",
+    physics: "물리학",
+    predicted: "예측했다",
+    prediction: "예측",
+    preparations: "준비 조치",
+    presentation: "발표, 프레젠테이션",
+    priority: "우선순위",
+    profession: "공언, 진술",
+    proclamation: "선언, 발표",
+    protein: "단백질",
+    publishing: "발표하다, 출판하다",
+    reputation: "평판",
+    research: "연구",
+    researcher: "연구자",
+    researchers: "연구자들",
+    revolution: "혁명",
+    scientific: "과학적인",
+    skepticism: "회의론, 의심",
+    singularity: "특이점",
+    "so-called": "이른바, 소위",
+    societal: "사회적인",
+    "societal-scale": "사회 전체 규모의",
+    somewhat: "다소, 어느 정도",
+    spacefaring: "우주를 항해하는, 우주 진출의",
+    starved: "굶주린, 부족한",
+    "substance-starved": "실질 내용이 부족한",
+    structure: "구조",
+    structures: "구조들",
+    subsidiary: "자회사",
+    suggest: "시사하다, 제안하다",
+    talk: "말하다, 이야기하다",
+    talking: "말하기, 이야기하는",
+    touted: "내세워진, 홍보된",
+    transition: "전환",
+    unlock: "열다, 가능하게 하다",
+    unparalleled: "비할 데 없는",
+    upgrade: "개선, 업그레이드",
+    upgrades: "개선들, 업그레이드",
+    universally: "보편적으로, 널리",
+    vaporous: "모호한, 실체가 희박한",
+    velocity: "속도",
+    version: "방식, 버전",
+    whitecollar: "사무직의",
+    "white-collar": "사무직의"
   };
 
   async function enrichImportedDataset(cards) {
@@ -1996,7 +2135,7 @@ document.addEventListener("DOMContentLoaded", () => {
     tokens.forEach(token => {
       const base = normalizeWordToken(token);
       if (found.length >= 10 || seen.has(base) || STOP_WORDS.has(base)) return;
-      const meaning = WORD_MEANINGS[base];
+      const meaning = directVocabularyMeaning(base);
       if (meaning) {
         found.push({ word: base, meaning });
         seen.add(base);
@@ -2006,8 +2145,11 @@ document.addEventListener("DOMContentLoaded", () => {
     tokens.forEach(token => {
       const base = normalizeWordToken(token);
       if (found.length >= 8 || seen.has(base) || STOP_WORDS.has(base) || base.length < 7) return;
-      found.push({ word: base, meaning: "문맥상 핵심어 - 사전에서 정확한 뜻을 확인해 보세요." });
-      seen.add(base);
+      const meaning = inferVocabularyMeaning(base);
+      if (meaning) {
+        found.push({ word: base, meaning });
+        seen.add(base);
+      }
     });
 
     return found;
@@ -2015,12 +2157,70 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function normalizeWordToken(token) {
     let word = token.toLowerCase().replace(/^'+|'+$/g, "");
-    if (WORD_MEANINGS[word]) return word;
-    if (word.endsWith("ies") && WORD_MEANINGS[`${word.slice(0, -3)}y`]) return `${word.slice(0, -3)}y`;
-    if (word.endsWith("ing") && WORD_MEANINGS[word.slice(0, -3)]) return word.slice(0, -3);
-    if (word.endsWith("ed") && WORD_MEANINGS[word.slice(0, -2)]) return word.slice(0, -2);
-    if (word.endsWith("s") && WORD_MEANINGS[word.slice(0, -1)]) return word.slice(0, -1);
+    if (directVocabularyMeaning(word)) return word;
+    if (word.endsWith("ies") && directVocabularyMeaning(`${word.slice(0, -3)}y`)) return `${word.slice(0, -3)}y`;
+    if (word.endsWith("ing") && directVocabularyMeaning(word.slice(0, -3))) return word.slice(0, -3);
+    if (word.endsWith("ing") && directVocabularyMeaning(`${word.slice(0, -3)}e`)) return `${word.slice(0, -3)}e`;
+    if (word.endsWith("ed") && directVocabularyMeaning(word.slice(0, -2))) return word.slice(0, -2);
+    if (word.endsWith("ed") && directVocabularyMeaning(`${word.slice(0, -1)}`)) return `${word.slice(0, -1)}`;
+    if (word.endsWith("s") && directVocabularyMeaning(word.slice(0, -1))) return word.slice(0, -1);
     return word;
+  }
+
+  function directVocabularyMeaning(word) {
+    const key = String(word || "").toLowerCase();
+    return WORD_MEANINGS[key] || WEB_WORD_MEANINGS[key] || "";
+  }
+
+  function displayVocabularyMeaning(word, meaning) {
+    const cleanMeaning = cleanImportText(meaning || "");
+    if (!isGenericVocabularyMeaning(cleanMeaning)) return cleanMeaning;
+    return directVocabularyMeaning(normalizeWordToken(word))
+      || inferVocabularyMeaning(word)
+      || "문장 안에서 중요한 단어입니다. 문장 번역과 함께 뜻을 잡아보세요.";
+  }
+
+  function isGenericVocabularyMeaning(meaning) {
+    const clean = cleanImportText(meaning);
+    return !clean
+      || clean === GENERIC_VOCABULARY_MEANING
+      || /사전에서 정확한 뜻을 확인/i.test(clean);
+  }
+
+  function inferVocabularyMeaning(word) {
+    const clean = String(word || "").toLowerCase().replace(/^'+|'+$/g, "");
+    if (!clean) return "";
+    const direct = directVocabularyMeaning(clean);
+    if (direct) return direct;
+
+    if (clean.includes("-")) {
+      const parts = clean.split("-").filter(Boolean);
+      const partMeanings = parts
+        .map(part => directVocabularyMeaning(normalizeWordToken(part)))
+        .filter(Boolean);
+      if (partMeanings.length === parts.length && partMeanings.length > 0) {
+        return partMeanings.join(" + ");
+      }
+    }
+
+    if (clean.endsWith("ly")) {
+      const root = clean.slice(0, -2);
+      const rootMeaning = directVocabularyMeaning(normalizeWordToken(root));
+      if (rootMeaning) return `${rootMeaning}하게`;
+    }
+
+    if (clean.endsWith("ing")) {
+      const root = normalizeWordToken(clean);
+      const rootMeaning = directVocabularyMeaning(root);
+      if (rootMeaning) return `${rootMeaning} 중인, ~하는 것`;
+    }
+
+    if (clean.endsWith("tion") || clean.endsWith("sion")) return "명사형 표현 - 과정, 상태, 결과를 나타냄";
+    if (clean.endsWith("ment")) return "명사형 표현 - 행동의 결과나 상태";
+    if (clean.endsWith("ity")) return "명사형 표현 - 성질이나 상태";
+    if (clean.endsWith("ive")) return "형용사형 표현 - ~하는 성격의";
+    if (clean.endsWith("ous")) return "형용사형 표현 - ~한 성질의";
+    return "";
   }
 
   function buildAutoStructureNotes(en) {
