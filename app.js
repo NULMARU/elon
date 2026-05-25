@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.4 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 사용자 매뉴얼
+ * v1.3.5 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 핵심 웹문장 추출 정밀화
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -1039,8 +1039,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // 1-B. 웹주소 → 핵심 영어 문단 추출
   // 브라우저 CORS 제약 때문에 직접 fetch 후 실패하면 읽기용 텍스트 프록시를 사용합니다.
   const WEB_READER_PREFIX = "https://r.jina.ai/http://";
-  const WEB_IMPORT_MAX_PARAGRAPHS = 14;
-  const WEB_IMPORT_MAX_CHARS = 4200;
+  const WEB_IMPORT_MAX_PARAGRAPHS = 6;
+  const WEB_IMPORT_MAX_CHARS = 2200;
+  const URL_TOKEN_STOP_WORDS = new Set([
+    "about", "after", "again", "also", "article", "before", "best", "coming", "deep", "from",
+    "heres", "here", "into", "must", "news", "over", "page", "pass", "review", "reviews",
+    "soon", "test", "that", "this", "what", "when", "where", "with", "your"
+  ]);
 
   async function extractLearningTextFromUrl(inputUrl) {
     const url = normalizeWebImportUrl(inputUrl);
@@ -1101,7 +1106,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const prepared = kind === "direct" && looksLikeHtml(rawText)
       ? htmlToReadableText(rawText)
       : stripReaderMarkdown(rawText);
-    const sections = buildWebTextSections(prepared);
+    const coreText = isolateCoreWebText(prepared, sourceUrl);
+    const sections = buildWebTextSections(coreText);
     const selected = selectCoreWebParagraphs(sections, sourceUrl);
     const text = selected.map(item => item.text).join("\n\n");
     return {
@@ -1136,11 +1142,87 @@ document.addEventListener("DOMContentLoaded", () => {
     return bodyLines
       .map(line => line
         .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+        .replace(/\[]\([^)]*\)/g, "")
         .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
         .replace(/^\s*[*+-]\s+/, "")
         .replace(/\s{2,}/g, " ")
         .trim())
       .join("\n");
+  }
+
+  function isolateCoreWebText(text, sourceUrl) {
+    const lines = normalizeImportMultilineText(text)
+      .split("\n")
+      .map(line => line.trim());
+    if (!lines.some(Boolean)) return "";
+
+    const startIndex = findArticleStartIndex(lines, sourceUrl);
+    const sliced = startIndex >= 0 ? lines.slice(startIndex) : lines;
+    const kept = [];
+    let contentLineCount = 0;
+
+    for (const rawLine of sliced) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (kept.length > 0 && kept[kept.length - 1] !== "") kept.push("");
+        continue;
+      }
+      if (contentLineCount >= 3 && isArticleEndMarker(line)) break;
+      if (shouldSkipWebArticleLine(line)) continue;
+      kept.push(line);
+      if (!/^#{1,6}\s+/.test(line)) contentLineCount += 1;
+    }
+
+    return kept.join("\n");
+  }
+
+  function findArticleStartIndex(lines, sourceUrl) {
+    let best = { index: -1, score: 0 };
+    lines.forEach((line, index) => {
+      if (!/^#{1,6}\s+/.test(line)) return;
+      const clean = cleanImportText(line.replace(/^#{1,6}\s+/, ""));
+      if (!isLikelyArticleHeading(clean)) return;
+      const score = scoreArticleHeading(clean, sourceUrl, index);
+      if (score > best.score) best = { index, score };
+    });
+    return best.score >= 14 ? best.index : -1;
+  }
+
+  function isLikelyArticleHeading(text) {
+    const clean = cleanImportText(text);
+    const words = clean.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    if (words.length < 5 || words.length > 24) return false;
+    if (isWebImportNoiseLine(clean) || isArticleEndMarker(clean)) return false;
+    if (/^(table of contents|contents|latest stories|most popular|popular articles)$/i.test(clean)) return false;
+    return true;
+  }
+
+  function scoreArticleHeading(text, sourceUrl, index) {
+    const lower = text.toLowerCase();
+    const urlTokens = extractUrlTokens(sourceUrl);
+    let score = 0;
+    urlTokens.forEach(token => {
+      if (lower.includes(token)) score += 7;
+    });
+    if (/[.?!:]|['"“”]/.test(text)) score += 3;
+    if (index > 10) score += 2;
+    if (countWords(text) >= 7) score += 3;
+    return score;
+  }
+
+  function shouldSkipWebArticleLine(line) {
+    const clean = cleanImportText(line.replace(/^#{1,6}\s+/, ""));
+    if (!clean) return true;
+    if (/^\{?[A-Z-]+\s+Replaced\}?$/i.test(clean)) return true;
+    if (/^\(?Credit:|^Photo:|^Image:|^Source:/i.test(clean)) return true;
+    if (isWebImportNoiseLine(clean)) return true;
+    return false;
+  }
+
+  function isArticleEndMarker(line) {
+    const clean = cleanImportText(line.replace(/^#{1,6}\s+/, ""));
+    if (!clean) return false;
+    return /^(about our expert|about the author|author bio|recommended for you|related articles|more from|more recommendations|based on these stories|popular reviews|popular product comparisons|top explainers|popular brands|best products|best picks|latest stories|latest news|follow pcmag|honest, objective, lab-tested reviews|what our ratings mean|read full review|pros & cons|specs & configurations|my best recommendation|here's what i found|keep scrolling|keep reading|hello!|i'm maggie|meet maggie|ask me|newsletter|sign up|subscribe|about pcmag|about ziff davis|advertise with us|privacy policy|terms of use|accessibility|do not sell|events|series)$/i.test(clean);
   }
 
   function buildWebTextSections(text) {
@@ -1195,10 +1277,11 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
-    const ranked = candidates
-      .sort((a, b) => b.score - a.score)
-      .slice(0, WEB_IMPORT_MAX_PARAGRAPHS)
+    const ordered = candidates
       .sort((a, b) => a.sectionIndex - b.sectionIndex || a.paragraphIndex - b.paragraphIndex);
+    const strong = ordered.filter((item, index) => index < 3 || item.score >= 34);
+    const ranked = (strong.length >= 4 ? strong : ordered)
+      .slice(0, WEB_IMPORT_MAX_PARAGRAPHS);
 
     const selected = [];
     let totalChars = 0;
@@ -1214,7 +1297,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function cleanWebParagraph(text) {
     return cleanImportText(text)
-      .replace(/^["“”]+|["“”]+$/g, "")
+      .replace(/"\)/g, "")
+      .replace(/\)(?=[.,;:])/g, "")
+      .replace(/([.?!])(?=[A-Z“”])/g, "$1 ")
+      .replace(/Click through[^.?!]*[.?!]/gi, "")
+      .replace(/\s+([”’])/g, "$1")
       .replace(/\s+-\s*$/, "")
       .replace(/\s{2,}/g, " ");
   }
@@ -1233,11 +1320,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const clean = cleanImportText(line);
     if (!clean || clean.length < 3) return true;
     if (/^(title|url source|published time|markdown content):/i.test(clean)) return true;
-    if (/^(vehicles|human spaceflight|company|shop|upcoming launches|all upcoming launches|careers|updates|content|privacy policy|suppliers|learn more|droneship|landing zone)$/i.test(clean)) return true;
+    if (/^(vehicles|human spaceflight|company|shop|upcoming launches|all upcoming launches|careers|updates|content|privacy policy|terms of use|suppliers|learn more|droneship|landing zone)$/i.test(clean)) return true;
+    if (/^(home|news|ai|artificial intelligence|deals|reviews|how-to|how to|products|best products|computing|mobile|security|software|business|entertainment)$/i.test(clean)) return true;
     if (/^(video|image)\s*\d+/i.test(clean)) return true;
+    if (/^\[]\(/.test(clean)) return true;
     if (/^t-\s*$/i.test(clean) || /^[\d\s:.-]+$/.test(clean)) return true;
+    if (/^by\s+[A-Z][A-Za-z .'-]{2,}$/i.test(clean)) return true;
+    if (/^(may|june|july|august|september|october|november|december|january|february|march|april)\s+\d{1,2},\s+\d{4}$/i.test(clean)) return true;
+    if (/^(share|social share|facebook|x\/twitter|twitter|threads|bluesky|reddit|linkedin|flipboard|pinterest|email)$/i.test(clean)) return true;
+    if (/\b(threads|bluesky|reddit|facebook|linkedin|pinterest|flipboard|twitter)\b/i.test(clean) && clean.length < 120) return true;
+    if (/^(copied|error!|copy link|comments|keep watching|recommended by our editors)$/i.test(clean)) return true;
+    if (/^https?:\/\//i.test(clean)) return true;
     if (/^©|copyright|trademark|privacy|mailto:|interested in becoming/i.test(clean)) return true;
     if (/^(starlink|starshield|xai|grok|grokipedia|terafab|spacex)$/i.test(clean)) return true;
+    if (/maggie|ai-powered assistant|trained exclusively|affiliate links|pcmag editors select|may contain advertising|advertisement|sponsored|coupon|deal of the day/i.test(clean)) return true;
+    if (/^(get our best stories|sign up for|subscribe to|follow us|join our newsletter|our expert industry analysis)/i.test(clean)) return true;
     if (/^\*+\s*$/.test(clean)) return true;
     return false;
   }
@@ -1270,20 +1367,25 @@ document.addEventListener("DOMContentLoaded", () => {
       return parsed.pathname
         .split(/[/-]+/)
         .map(token => token.toLowerCase().replace(/[^a-z0-9]/g, ""))
-        .filter(token => token.length >= 4);
+        .filter(token => token.length >= 4 && !URL_TOKEN_STOP_WORDS.has(token));
     } catch (e) {
       return [];
     }
   }
 
   function deriveWebImportTitle(text, sourceUrl) {
-    const titleLine = normalizeImportMultilineText(text)
+    const lines = normalizeImportMultilineText(text)
       .split("\n")
-      .map(line => line.trim())
-      .find(line => /^Title:/i.test(line));
-    const rawTitle = titleLine ? titleLine.replace(/^Title:\s*/i, "") : "";
-    const cleanTitle = cleanImportText(rawTitle).replace(/\s+-\s+.*$/, "");
-    if (cleanTitle && cleanTitle.length <= 60) return cleanTitle;
+      .map(line => line.trim());
+    const titleLine = lines.find(line => /^Title:/i.test(line));
+    const headingLine = lines.find(line => /^#{1,6}\s+/.test(line) && !isWebImportNoiseLine(line.replace(/^#{1,6}\s+/, "")));
+    const rawTitle = titleLine
+      ? titleLine.replace(/^Title:\s*/i, "")
+      : (headingLine || "").replace(/^#{1,6}\s+/, "");
+    const cleanTitle = cleanImportText(rawTitle)
+      .replace(/\s+\|\s+.*$/, "")
+      .replace(/\s+-\s+.*$/, "");
+    if (cleanTitle && cleanTitle.length <= 90) return cleanTitle;
     try {
       const parsed = new URL(sourceUrl);
       const path = parsed.pathname.split("/").filter(Boolean).pop() || parsed.hostname;
