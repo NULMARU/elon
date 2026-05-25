@@ -891,6 +891,46 @@ input:checked + .toggle-slider:before {
   display: none;
 }
 
+.url-import-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.url-paste-input {
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 10px;
+  font-size: 12.5px;
+  border-radius: 8px;
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.url-paste-input:focus {
+  border-color: var(--accent-color);
+}
+
+.url-import-btn {
+  min-width: 74px;
+}
+
+.url-import-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.url-import-status.success {
+  color: var(--accent-color);
+}
+
+.url-import-status.error {
+  color: #ff9f8f;
+}
+
 .text-paste-area {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);

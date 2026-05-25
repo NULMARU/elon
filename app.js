@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.2 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 줄바꿈 기반 텍스트 분할
+ * v1.3.3 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 웹주소 핵심 영어 추출
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -36,6 +36,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── 현재 카드에 표시된 문장 (이벤트 위임 핸들러에서 참조) ──
   let currentSentence = null;
+
+  // ── URL 추출 결과의 제목을 다음 카드 저장에 연결 ──
+  let pendingWebImport = null;
 
   // ── DOM 엘리먼트 참조 ──
   const body = document.body;
@@ -74,6 +77,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 파일 추가 입력기
   const fileUploadInput = document.getElementById("file-upload");
+  const urlPasteInput = document.getElementById("url-paste");
+  const urlImportBtn = document.getElementById("url-import-btn");
+  const urlImportStatus = document.getElementById("url-import-status");
   const textPasteArea = document.getElementById("text-paste");
   const textSubmitBtn = document.getElementById("text-submit-btn");
 
@@ -1028,6 +1034,263 @@ document.addEventListener("DOMContentLoaded", () => {
     return englishUnits.length
       ? uniqueImportLines(englishUnits)
       : uniqueImportLines(splitIntoSentences(fallback).filter(text => !isImportNoise(text)));
+  }
+
+  // 1-B. 웹주소 → 핵심 영어 문단 추출
+  // 브라우저 CORS 제약 때문에 직접 fetch 후 실패하면 읽기용 텍스트 프록시를 사용합니다.
+  const WEB_READER_PREFIX = "https://r.jina.ai/http://";
+  const WEB_IMPORT_MAX_PARAGRAPHS = 14;
+  const WEB_IMPORT_MAX_CHARS = 4200;
+
+  async function extractLearningTextFromUrl(inputUrl) {
+    const url = normalizeWebImportUrl(inputUrl);
+    const attempts = [
+      { label: "reader", url: buildReaderUrl(url), kind: "reader" },
+      { label: "direct", url, kind: "direct" }
+    ];
+
+    let lastError = "";
+    for (const attempt of attempts) {
+      try {
+        const raw = await fetchTextWithTimeout(attempt.url, 15000);
+        const result = extractCoreEnglishFromWebText(raw, url, attempt.kind);
+        if (result.text) {
+          return { ...result, sourceUrl: url, via: attempt.label };
+        }
+      } catch (err) {
+        lastError = err?.message || String(err);
+      }
+    }
+
+    throw new Error(lastError || "웹페이지에서 학습할 영어 문단을 찾지 못했습니다.");
+  }
+
+  function normalizeWebImportUrl(inputUrl) {
+    const trimmed = cleanImportText(inputUrl);
+    if (!trimmed) throw new Error("웹주소를 입력해 주세요.");
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    let url;
+    try {
+      url = new URL(withProtocol);
+    } catch (e) {
+      throw new Error("올바른 웹주소 형식이 아닙니다.");
+    }
+    if (!["http:", "https:"].includes(url.protocol)) {
+      throw new Error("http 또는 https 주소만 가져올 수 있습니다.");
+    }
+    return url.toString();
+  }
+
+  function buildReaderUrl(url) {
+    return `${WEB_READER_PREFIX}${url}`;
+  }
+
+  async function fetchTextWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) throw new Error(`웹 요청 실패 (${res.status})`);
+      return await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function extractCoreEnglishFromWebText(rawText, sourceUrl, kind) {
+    const prepared = kind === "direct" && looksLikeHtml(rawText)
+      ? htmlToReadableText(rawText)
+      : stripReaderMarkdown(rawText);
+    const sections = buildWebTextSections(prepared);
+    const selected = selectCoreWebParagraphs(sections, sourceUrl);
+    const text = selected.map(item => item.text).join("\n\n");
+    return {
+      text,
+      paragraphCount: selected.length,
+      title: deriveWebImportTitle(prepared, sourceUrl)
+    };
+  }
+
+  function htmlToReadableText(htmlText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlText, "text/html");
+    const title = cleanImportText(doc.querySelector("title")?.textContent || "");
+    const description = cleanImportText(doc.querySelector("meta[name='description']")?.getAttribute("content") || "");
+    const root = doc.querySelector("main, article, [role='main']") || doc.body || doc;
+    Array.from(root.querySelectorAll("script, style, noscript, svg, canvas, audio, video, nav, footer, header, form")).forEach(el => el.remove());
+    const lines = Array.from(root.querySelectorAll("h1, h2, h3, p, li, blockquote"))
+      .map(el => {
+        const tag = el.tagName.toLowerCase();
+        const text = cleanImportText(el.textContent || "");
+        if (!text) return "";
+        return /^h[1-3]$/.test(tag) ? `# ${text}` : text;
+      })
+      .filter(Boolean);
+    return [title ? `Title: ${title}` : "", description, "Markdown Content:", ...lines].filter(Boolean).join("\n\n");
+  }
+
+  function stripReaderMarkdown(rawText) {
+    const lines = normalizeImportMultilineText(rawText).split("\n");
+    const start = lines.findIndex(line => /^Markdown Content:/i.test(line.trim()));
+    const bodyLines = start >= 0 ? lines.slice(start + 1) : lines;
+    return bodyLines
+      .map(line => line
+        .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+        .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+        .replace(/^\s*[*+-]\s+/, "")
+        .replace(/\s{2,}/g, " ")
+        .trim())
+      .join("\n");
+  }
+
+  function buildWebTextSections(text) {
+    const sections = [];
+    let current = { heading: "", paragraphs: [] };
+    let paragraphLines = [];
+
+    const flushParagraph = () => {
+      if (paragraphLines.length === 0) return;
+      const paragraph = cleanImportText(paragraphLines.join(" "));
+      if (paragraph) current.paragraphs.push(paragraph);
+      paragraphLines = [];
+    };
+
+    normalizeImportMultilineText(text).split("\n").forEach(rawLine => {
+      const line = rawLine.trim();
+      if (!line) {
+        flushParagraph();
+        return;
+      }
+      const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+      if (headingMatch) {
+        flushParagraph();
+        if (current.heading || current.paragraphs.length > 0) sections.push(current);
+        current = { heading: cleanImportText(headingMatch[1]), paragraphs: [] };
+        return;
+      }
+      if (isWebImportNoiseLine(line)) {
+        flushParagraph();
+        return;
+      }
+      paragraphLines.push(line);
+    });
+
+    flushParagraph();
+    if (current.heading || current.paragraphs.length > 0) sections.push(current);
+    return sections;
+  }
+
+  function selectCoreWebParagraphs(sections, sourceUrl) {
+    const candidates = [];
+    sections.forEach((section, sectionIndex) => {
+      section.paragraphs.forEach((paragraph, paragraphIndex) => {
+        const text = cleanWebParagraph(paragraph);
+        if (!isUsefulWebParagraph(text)) return;
+        candidates.push({
+          text,
+          sectionIndex,
+          paragraphIndex,
+          score: scoreWebParagraph(text, section.heading, sourceUrl)
+        });
+      });
+    });
+
+    const ranked = candidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, WEB_IMPORT_MAX_PARAGRAPHS)
+      .sort((a, b) => a.sectionIndex - b.sectionIndex || a.paragraphIndex - b.paragraphIndex);
+
+    const selected = [];
+    let totalChars = 0;
+    ranked.forEach(item => {
+      if (totalChars + item.text.length > WEB_IMPORT_MAX_CHARS && selected.length >= 5) return;
+      selected.push(item);
+      totalChars += item.text.length;
+    });
+
+    if (selected.length > 0) return selected;
+    return candidates.slice(0, 8);
+  }
+
+  function cleanWebParagraph(text) {
+    return cleanImportText(text)
+      .replace(/^["“”]+|["“”]+$/g, "")
+      .replace(/\s+-\s*$/, "")
+      .replace(/\s{2,}/g, " ");
+  }
+
+  function isUsefulWebParagraph(text) {
+    const clean = cleanImportText(text);
+    const words = clean.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    const koreanCount = (clean.match(/[가-힣]/g) || []).length;
+    if (koreanCount > 0 || words.length < 8 || words.length > 120) return false;
+    if (isWebImportNoiseLine(clean)) return false;
+    if ((clean.match(/\d/g) || []).length > clean.length * 0.35) return false;
+    return /[.?!]["”’']?$/.test(clean) || words.length >= 14;
+  }
+
+  function isWebImportNoiseLine(line) {
+    const clean = cleanImportText(line);
+    if (!clean || clean.length < 3) return true;
+    if (/^(title|url source|published time|markdown content):/i.test(clean)) return true;
+    if (/^(vehicles|human spaceflight|company|shop|upcoming launches|all upcoming launches|careers|updates|content|privacy policy|suppliers|learn more|droneship|landing zone)$/i.test(clean)) return true;
+    if (/^(video|image)\s*\d+/i.test(clean)) return true;
+    if (/^t-\s*$/i.test(clean) || /^[\d\s:.-]+$/.test(clean)) return true;
+    if (/^©|copyright|trademark|privacy|mailto:|interested in becoming/i.test(clean)) return true;
+    if (/^(starlink|starshield|xai|grok|grokipedia|terafab|spacex)$/i.test(clean)) return true;
+    if (/^\*+\s*$/.test(clean)) return true;
+    return false;
+  }
+
+  function scoreWebParagraph(text, heading, sourceUrl) {
+    const lower = `${heading} ${text}`.toLowerCase();
+    const wordCount = countWords(text);
+    const urlTokens = extractUrlTokens(sourceUrl);
+    const coreKeywords = [
+      "mission", "space", "spaceflight", "rocket", "launch", "reusable", "reusability",
+      "spacecraft", "orbit", "mars", "moon", "human", "starship", "falcon", "dragon",
+      "landing", "facility", "history", "development", "testing", "commercial"
+    ];
+    let score = Math.min(wordCount, 60);
+    urlTokens.forEach(token => {
+      if (token.length >= 4 && lower.includes(token)) score += 18;
+    });
+    coreKeywords.forEach(token => {
+      if (lower.includes(token)) score += 6;
+    });
+    if (heading && !isWebImportNoiseLine(heading)) score += 8;
+    if (wordCount >= 16 && wordCount <= 70) score += 12;
+    if (/click through|learn more|please email|privacy|suppliers/i.test(text)) score -= 30;
+    return score;
+  }
+
+  function extractUrlTokens(url) {
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname
+        .split(/[/-]+/)
+        .map(token => token.toLowerCase().replace(/[^a-z0-9]/g, ""))
+        .filter(token => token.length >= 4);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function deriveWebImportTitle(text, sourceUrl) {
+    const titleLine = normalizeImportMultilineText(text)
+      .split("\n")
+      .map(line => line.trim())
+      .find(line => /^Title:/i.test(line));
+    const rawTitle = titleLine ? titleLine.replace(/^Title:\s*/i, "") : "";
+    const cleanTitle = cleanImportText(rawTitle).replace(/\s+-\s+.*$/, "");
+    if (cleanTitle && cleanTitle.length <= 60) return cleanTitle;
+    try {
+      const parsed = new URL(sourceUrl);
+      const path = parsed.pathname.split("/").filter(Boolean).pop() || parsed.hostname;
+      return path.replace(/[-_]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
+    } catch (e) {
+      return "웹 추출 자료";
+    }
   }
 
   function parseLineSequenceHtml(lines, idPrefix) {
@@ -2100,9 +2363,23 @@ document.addEventListener("DOMContentLoaded", () => {
       textSubmitBtn.disabled = isBusy;
       textSubmitBtn.textContent = isBusy ? label : "영문 텍스트로 카드 만들기";
     }
+    if (urlImportBtn) {
+      urlImportBtn.disabled = isBusy;
+      urlImportBtn.textContent = isBusy ? "처리 중…" : "추출";
+    }
+    if (urlPasteInput) {
+      urlPasteInput.disabled = isBusy;
+    }
     if (fileUploadInput) {
       fileUploadInput.disabled = isBusy;
     }
+  }
+
+  function setUrlImportStatus(message, type = "") {
+    if (!urlImportStatus) return;
+    urlImportStatus.textContent = message;
+    urlImportStatus.classList.remove("success", "error");
+    if (type) urlImportStatus.classList.add(type);
   }
 
   // ── 이벤트 핸들러 바인딩 ──
@@ -2273,6 +2550,46 @@ document.addEventListener("DOMContentLoaded", () => {
       e.target.value = "";
     });
 
+    // 웹주소에서 핵심 영어 추출 → 아래 텍스트칸에 붙여넣기
+    if (urlImportBtn && urlPasteInput) {
+      urlImportBtn.addEventListener("click", async () => {
+        const urlText = urlPasteInput.value.trim();
+        if (!urlText) {
+          alert("가져올 웹주소를 입력해 주세요.");
+          return;
+        }
+
+        setImportBusy(true, "웹 추출 중…");
+        setUrlImportStatus("웹페이지를 읽고 핵심 영어 문단을 고르는 중입니다...");
+        try {
+          const result = await extractLearningTextFromUrl(urlText);
+          const parsed = parseRawText(result.text);
+          if (parsed.length === 0) {
+            throw new Error("학습 카드로 만들 수 있는 영어 문장을 찾지 못했습니다.");
+          }
+
+          textPasteArea.value = result.text;
+          pendingWebImport = { title: result.title, sourceUrl: result.sourceUrl };
+          setUrlImportStatus(
+            `추출 완료: 핵심 문단 ${result.paragraphCount}개, 예상 카드 ${parsed.length}개가 아래 텍스트칸에 들어갔습니다. 확인 후 '영문 텍스트로 카드 만들기'를 누르세요.`,
+            "success"
+          );
+        } catch (err) {
+          setUrlImportStatus("웹 추출 실패: 파일 업로드 또는 직접 붙여넣기를 사용해 주세요.", "error");
+          alert(`웹주소 추출에 실패했습니다:\n${err.message}`);
+        } finally {
+          setImportBusy(false);
+        }
+      });
+
+      urlPasteInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          urlImportBtn.click();
+        }
+      });
+    }
+
     // 직접 붙여넣기
     textSubmitBtn.addEventListener("click", async () => {
       const text = textPasteArea.value.trim();
@@ -2287,8 +2604,13 @@ document.addEventListener("DOMContentLoaded", () => {
           alert("파싱에 실패했습니다. HTML 문서 또는 '영어 문장 | 한국어 번역 | 단어1=뜻;단어2=뜻' 형식인지 확인해 주세요.");
           return;
         }
-        await loadAndActivateNewDataset(`직접 입력 카드 (${parsed.length}문장)`, parsed);
+        const title = pendingWebImport?.title
+          ? `웹 추출: ${pendingWebImport.title}`
+          : `직접 입력 카드 (${parsed.length}문장)`;
+        await loadAndActivateNewDataset(title, parsed);
         textPasteArea.value = "";
+        pendingWebImport = null;
+        setUrlImportStatus("* 웹페이지의 핵심 영어 문단을 아래 텍스트칸에 붙여넣습니다. CORS 차단 시 읽기용 텍스트 프록시를 사용합니다.");
       } catch (err) {
         alert(`텍스트 파싱 오류: ${err.message}`);
       } finally {

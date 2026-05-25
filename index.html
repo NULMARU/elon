@@ -222,11 +222,23 @@
               * 전용 HTML, 일반 HTML 문서, JSON, TXT를 그대로 넣을 수 있습니다.
             </div>
 
-            <!-- 방법 B: 직접 복사 붙여넣기 -->
+            <!-- 방법 B: 웹주소에서 핵심 영어 추출 -->
+            <div style="font-size: 12px; color: var(--text-main); font-weight: 700; margin-top: 8px;">
+              웹주소에서 핵심 영어 추출
+            </div>
+            <div class="url-import-row">
+              <input id="url-paste" class="url-paste-input" type="url" inputmode="url" placeholder="예: https://www.spacex.com/mission">
+              <button id="url-import-btn" class="submit-btn url-import-btn">추출</button>
+            </div>
+            <div id="url-import-status" class="url-import-status" aria-live="polite">
+              * 웹페이지의 핵심 영어 문단을 아래 텍스트칸에 붙여넣습니다. CORS 차단 시 읽기용 텍스트 프록시를 사용합니다.
+            </div>
+
+            <!-- 방법 C: 직접 복사 붙여넣기 -->
             <div style="font-size: 12px; color: var(--text-main); font-weight: 700; margin-top: 8px;">
               영문 텍스트 직접 붙여넣기
             </div>
-            <textarea id="text-paste" class="text-paste-area" placeholder="영문 기사, 대본, 가사, 문단을 그대로 붙여넣으세요.&#10;예: Tesla is expanding its energy business. Customers want faster launch schedules.&#10;&#10;번역이 있으면 기존 형식도 가능:&#10;영어 문장 | 한국어 번역 | 단어=뜻;단어2=뜻"></textarea>
+            <textarea id="text-paste" class="text-paste-area" placeholder="영문 기사, 대본, 가사, 문단을 그대로 붙여넣으세요.&#10;웹주소 추출 결과도 여기에 자동으로 들어옵니다.&#10;&#10;번역이 있으면 기존 형식도 가능:&#10;영어 문장 | 한국어 번역 | 단어=뜻;단어2=뜻"></textarea>
             <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">
               * 순수 영문만 붙여넣어도 문장/줄 단위 카드로 나누고, 번역·단어 설명을 자동 보강합니다.
             </div>
@@ -236,7 +248,7 @@
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v1.3.2 · Smartphone English Study PWA<br>
+          영한번역 v1.3.3 · Smartphone English Study PWA<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>
       </div>
