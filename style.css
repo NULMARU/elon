@@ -858,6 +858,61 @@ input:checked + .toggle-slider:before {
   border-color: var(--accent-color);
 }
 
+/* [사용자 매뉴얼] */
+.manual-box {
+  background: linear-gradient(135deg, var(--bg-color), rgba(224, 184, 90, 0.08));
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.manual-box summary {
+  padding: 12px 14px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.manual-box summary::-webkit-details-marker {
+  display: none;
+}
+
+.manual-box summary::after {
+  content: "열기/닫기";
+  float: right;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.manual-content {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.manual-content section {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.manual-content h3 {
+  margin: 0 0 4px;
+  color: var(--accent-color);
+  font-size: 12px;
+}
+
+.manual-content p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
 /* [파일 임포트 구역] */
 .file-manager-box {
   display: flex;

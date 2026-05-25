@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.3 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 웹주소 핵심 영어 추출
+ * v1.3.4 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 사용자 매뉴얼
  */
 
 document.addEventListener("DOMContentLoaded", () => {
