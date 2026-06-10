@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.6 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 앱내 단어 뜻 보강
+ * v1.3.7 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 완전한 문장 단위 파싱
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -2466,23 +2466,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function splitOverlongEnglishUnit(text) {
     const clean = cleanImportText(text);
-    const words = clean.match(/\S+/g) || [];
-    const maxWords = 18;
-    const maxChars = 150;
-    if (words.length <= maxWords && clean.length <= maxChars) return [clean];
+    if (!clean) return [];
 
     const sentenceUnits = splitIntoSentences(clean)
       .map(cleanImportText)
       .filter(unit => unit && unit !== clean);
     if (sentenceUnits.length > 1) {
-      return sentenceUnits.flatMap(unit => splitOverlongEnglishUnit(unit));
+      return sentenceUnits;
     }
-
-    const chunks = [];
-    for (let i = 0; i < words.length; i += maxWords) {
-      chunks.push(words.slice(i, i + maxWords).join(" "));
-    }
-    return chunks;
+    return [clean];
   }
 
   // ── 새 학습 리스트 저장 및 활성화 ──
@@ -2503,20 +2495,30 @@ document.addEventListener("DOMContentLoaded", () => {
     cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || "보통";
   }
 
-  // 문장 분리: 영문 종결부호 + 닫는 인용부호 뒤 공백 기준. 약어/소수점은 최소 보호.
+  // 문장 분리: 긴 문장도 단어 수로 자르지 않고, 실제 종결부호 기준으로만 나눕니다.
   function splitIntoSentences(text) {
     if (text == null) return [];
     const s = String(text).trim();
     if (!s) return [];
-    const marked = s
-      // 소수점(1.5) 보호
-      .replace(/(\d)\.(\d)/g, "$1$2")
-      // 종결부호(., ?, !) + 선택적 닫는 인용부호 뒤에 공백이 오면 분리 지점 표시
-      .replace(/([.?!]["”’']?)\s+/g, "$1");
+    const protectedText = protectSentenceDots(s);
+    const marked = protectedText.replace(/([.?!]["”’']?)\s+/g, "$1");
     const parts = marked.split("")
       .map(p => p.replace(//g, ".").trim())
       .filter(Boolean);
     return parts.length ? parts : [s];
+  }
+
+  function protectSentenceDots(text) {
+    const dot = "";
+    return String(text)
+      // 소수점(1.5) 보호
+      .replace(/(\d)\.(\d)/g, `$1${dot}$2`)
+      // 흔한 약어, 직함, 회사명, 지역 약어 보호
+      .replace(/\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Mt|No|vs|etc|Inc|Ltd|Corp|Co)\./gi, match => match.replace(/\./g, dot))
+      .replace(/\b(?:e\.g|i\.e|U\.S|U\.K|E\.U|A\.I|A\.G\.I)\./gi, match => match.replace(/\./g, dot))
+      // 이름 이니셜: J. R. Smith 같은 형태 보호
+      .replace(/\b([A-Z])\.(?=\s+[A-Z]\.)/g, `$1${dot}`)
+      .replace(/\b([A-Z])\.(?=\s+[A-Z][a-z])/g, `$1${dot}`);
   }
 
   function countWords(en) {
