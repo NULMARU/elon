@@ -146,7 +146,7 @@ header {
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .select-wrapper {
@@ -206,6 +206,49 @@ header {
 .icon-btn:active {
   transform: scale(0.95);
   background-color: var(--surface-hover);
+}
+
+.font-quick-controls {
+  display: grid;
+  grid-template-columns: 30px minmax(38px, auto) 30px;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.font-quick-btn {
+  width: 30px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.font-quick-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.font-quick-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.font-quick-label {
+  min-width: 38px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
 }
 
 /* ── 메인 카드 스크롤 영역 ── */
@@ -1162,6 +1205,25 @@ input:checked + .toggle-slider:before {
 
 .font-xl .sentence-en { font-size: 28px; }
 .font-xl .sentence-ko, .font-xl .notes-section { font-size: 22px; }
+
+@media (max-width: 430px) {
+  .header-controls {
+    gap: 6px;
+  }
+
+  .file-select {
+    max-width: 112px;
+    padding-left: 10px;
+  }
+
+  .font-quick-controls {
+    grid-template-columns: 28px 28px;
+  }
+
+  .font-quick-label {
+    display: none;
+  }
+}
 
 /* ── 학습 모드 토글 (전체 / 즐겨찾기 복습) ── */
 .mode-toggle {

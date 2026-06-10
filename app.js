@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.7 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 완전한 문장 단위 파싱
+ * v1.3.8 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 주화면 글자 크기 조절
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -52,6 +52,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const closeSettingsBtn = document.getElementById("close-settings-btn");
   const settingsPanel = document.getElementById("settings-panel");
   const dimOverlay = document.getElementById("dim-overlay");
+  const fontDecreaseBtn = document.getElementById("font-decrease-btn");
+  const fontIncreaseBtn = document.getElementById("font-increase-btn");
+  const fontSizeQuickLabel = document.getElementById("font-size-quick-label");
 
   // 하단 컨트롤러
   const prevBtn = document.getElementById("prev-btn");
@@ -391,6 +394,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── 테마 및 폰트 변경 처리 ──
+  const FONT_SIZE_ORDER = ["sm", "md", "lg", "xl"];
+  const FONT_SIZE_LABEL = { "sm": "작게", "md": "보통", "lg": "크게", "xl": "아주 크게" };
+
   function setupTheme(theme) {
     state.settings.theme = theme;
     document.documentElement.setAttribute("data-theme", theme);
@@ -401,17 +407,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function setupFontSize(size) {
-    state.settings.fontSize = size;
+    const normalizedSize = FONT_SIZE_ORDER.includes(size) ? size : "md";
+    state.settings.fontSize = normalizedSize;
     body.classList.remove("font-sm", "font-md", "font-lg", "font-xl");
-    body.classList.add(`font-${size}`);
+    body.classList.add(`font-${normalizedSize}`);
 
-    const sizeMap = { "sm": 0, "md": 1, "lg": 2, "xl": 3 };
-    fontSizeSlider.value = sizeMap[size];
+    const sizeIndex = FONT_SIZE_ORDER.indexOf(normalizedSize);
+    if (fontSizeSlider) fontSizeSlider.value = sizeIndex;
 
-    const displayMap = { "sm": "작게", "md": "보통", "lg": "크게", "xl": "아주 크게" };
-    fontSizeVal.textContent = displayMap[size];
+    const label = FONT_SIZE_LABEL[normalizedSize] || FONT_SIZE_LABEL.md;
+    if (fontSizeVal) fontSizeVal.textContent = label;
+    if (fontSizeQuickLabel) fontSizeQuickLabel.textContent = label;
+    if (fontDecreaseBtn) fontDecreaseBtn.disabled = sizeIndex <= 0;
+    if (fontIncreaseBtn) fontIncreaseBtn.disabled = sizeIndex >= FONT_SIZE_ORDER.length - 1;
 
     saveSettingsToStorage();
+  }
+
+  function changeFontSizeBy(delta) {
+    const currentIndex = FONT_SIZE_ORDER.indexOf(state.settings.fontSize);
+    const nextIndex = Math.min(FONT_SIZE_ORDER.length - 1, Math.max(0, (currentIndex < 0 ? 1 : currentIndex) + delta));
+    setupFontSize(FONT_SIZE_ORDER[nextIndex]);
   }
 
   // ── TTS 목소리 목록 구성 ──
@@ -2748,10 +2764,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // 설정: 폰트 크기
-    fontSizeSlider.addEventListener("input", (e) => {
-      const sizes = ["sm", "md", "lg", "xl"];
-      setupFontSize(sizes[parseInt(e.target.value)]);
-    });
+    if (fontDecreaseBtn) {
+      fontDecreaseBtn.addEventListener("click", () => changeFontSizeBy(-1));
+    }
+    if (fontIncreaseBtn) {
+      fontIncreaseBtn.addEventListener("click", () => changeFontSizeBy(1));
+    }
+    if (fontSizeSlider) {
+      fontSizeSlider.addEventListener("input", (e) => {
+        setupFontSize(FONT_SIZE_ORDER[parseInt(e.target.value)]);
+      });
+    }
 
     // 설정: 카드 분량 (변경 시 현재 가져온 파일을 재분할)
     if (cardDensitySlider) {

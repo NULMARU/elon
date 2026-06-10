@@ -4,7 +4,7 @@
  * - 외부 폰트/CDN: stale-while-revalidate
  * - 외부 사전 사이트: 캐시하지 않음 (네트워크 이동)
  */
-const CACHE_VERSION = "yh-cache-v11";
+const CACHE_VERSION = "yh-cache-v12";
 
 const APP_SHELL = [
   "./",
