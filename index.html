@@ -325,8 +325,9 @@
         <div class="setting-group" id="eleven-voice-group" style="display: none;">
           <label>ElevenLabs 목소리</label>
           <select id="eleven-voice-select" class="settings-select" title="ElevenLabs 음성 선택">
-            <!-- 키 입력 시 계정 음성 목록 자동 로드 -->
+            <!-- 키 입력 시 계정 음성 목록 자동 로드 (실패 시 기본 제공 목소리) -->
           </select>
+          <div id="eleven-voice-status" class="url-import-status" style="margin-top: 6px;" aria-live="polite"></div>
         </div>
 
         <!-- ── 영어 수준 설정 ── -->

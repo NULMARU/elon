@@ -545,6 +545,33 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── ElevenLabs 목소리 목록 구성 (키가 있을 때만 노출) ──
+  const elevenVoiceStatus = document.getElementById("eleven-voice-status");
+
+  function setElevenVoiceStatus(message, type = "") {
+    if (!elevenVoiceStatus) return;
+    elevenVoiceStatus.textContent = message;
+    elevenVoiceStatus.classList.remove("success", "error");
+    if (type) elevenVoiceStatus.classList.add(type);
+  }
+
+  function renderElevenVoiceOptions(voices) {
+    elevenVoiceSelect.innerHTML = "";
+    voices.forEach(voice => {
+      const option = document.createElement("option");
+      option.value = voice.voiceId;
+      option.textContent = voice.labels ? `${voice.name} (${voice.labels})` : voice.name;
+      if (voice.voiceId === state.settings.elevenVoiceId) option.selected = true;
+      elevenVoiceSelect.appendChild(option);
+    });
+
+    // 저장된 음성이 목록에 없으면 첫 음성으로 보정
+    if (!voices.some(v => v.voiceId === state.settings.elevenVoiceId)) {
+      state.settings.elevenVoiceId = voices[0].voiceId;
+      elevenVoiceSelect.value = state.settings.elevenVoiceId;
+      saveSettingsToStorage();
+    }
+  }
+
   async function populateElevenVoices() {
     if (!elevenVoiceSelect || !elevenVoiceGroup) return;
 
@@ -555,40 +582,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     elevenVoiceGroup.style.display = "";
     elevenVoiceSelect.innerHTML = "<option value=''>목소리 목록 불러오는 중…</option>";
+    setElevenVoiceStatus("");
 
     try {
       const voices = await YHAI.listElevenVoices({ apiKey: state.settings.elevenApiKey });
-      elevenVoiceSelect.innerHTML = "";
-
-      if (voices.length === 0) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "기본 음성 (Rachel)";
-        elevenVoiceSelect.appendChild(option);
-        return;
-      }
-
-      voices.forEach(voice => {
-        const option = document.createElement("option");
-        option.value = voice.voiceId;
-        option.textContent = voice.labels ? `${voice.name} (${voice.labels})` : voice.name;
-        if (voice.voiceId === state.settings.elevenVoiceId) option.selected = true;
-        elevenVoiceSelect.appendChild(option);
-      });
-
-      // 저장된 음성이 계정에 없으면 첫 음성으로 보정
-      if (!voices.some(v => v.voiceId === state.settings.elevenVoiceId)) {
-        state.settings.elevenVoiceId = voices[0].voiceId;
-        elevenVoiceSelect.value = state.settings.elevenVoiceId;
-        saveSettingsToStorage();
-      }
+      if (voices.length === 0) throw new Error("계정 음성 목록이 비어 있습니다.");
+      renderElevenVoiceOptions(voices);
+      setElevenVoiceStatus(`계정 음성 ${voices.length}개를 불러왔습니다.`, "success");
     } catch (e) {
-      console.warn("ElevenLabs 음성 목록 로드 실패:", e);
-      elevenVoiceSelect.innerHTML = "";
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "목록 로드 실패 — 기본 음성(Rachel) 사용";
-      elevenVoiceSelect.appendChild(option);
+      // 계정 목록 조회가 막혀도(권한 제한 키 등) 기본 제공 목소리는 모든 계정에서 재생 가능
+      console.warn("ElevenLabs 계정 음성 목록 로드 실패 → 기본 제공 목소리로 대체:", e);
+      renderElevenVoiceOptions(YHAI.ELEVEN_PREMADE_VOICES);
+      setElevenVoiceStatus(
+        `계정 목록 로드 실패: ${e.message} 대신 기본 제공 목소리 ${YHAI.ELEVEN_PREMADE_VOICES.length}종을 표시합니다 — 모두 선택·재생 가능합니다.`,
+        "error"
+      );
     }
   }
 

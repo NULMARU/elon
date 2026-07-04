@@ -418,11 +418,38 @@ JSON만 출력:
   // turbo v2.5: multilingual v2 대비 절반 크레딧, 짧은 문장 학습용으로 충분한 품질
   const ELEVEN_MODEL = "eleven_turbo_v2_5";
 
-  function elevenError(status) {
-    if (status === 401) return new Error("ElevenLabs API 키가 올바르지 않습니다. 설정에서 키를 확인해 주세요.");
-    if (status === 402 || status === 429) return new Error("ElevenLabs 크레딧/사용량 한도에 도달했습니다.");
-    return new Error(`ElevenLabs 요청 실패 (HTTP ${status})`);
+  function elevenError(status, detail) {
+    const extra = detail ? ` — ${detail}` : "";
+    if (status === 401 || status === 403) {
+      return new Error(`API 키 인증/권한 오류 (HTTP ${status})${extra}. 키가 권한 제한(scoped) 키라면 ElevenLabs에서 'Voices: Read' 권한을 켜 주세요.`);
+    }
+    if (status === 402 || status === 429) return new Error(`크레딧/사용량 한도 도달 (HTTP ${status})${extra}`);
+    return new Error(`요청 실패 (HTTP ${status})${extra}`);
   }
+
+  // ElevenLabs 기본 제공(premade) 목소리 — 모든 계정에서 사용 가능, 목록 API가 막혀도 이 ID로 재생 가능
+  const ELEVEN_PREMADE_VOICES = [
+    { voiceId: "21m00Tcm4TlvDq8ikWAM", name: "Rachel", labels: "여, 미국, 차분" },
+    { voiceId: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", labels: "여, 미국, 부드러움" },
+    { voiceId: "9BWtsMINqrJLrRacOk9x", name: "Aria", labels: "여, 미국, 허스키" },
+    { voiceId: "FGY2WhTYpPnrIDTdsKH5", name: "Laura", labels: "여, 미국, 발랄" },
+    { voiceId: "cgSgspJ2msm6clMCkdW9", name: "Jessica", labels: "여, 미국, 밝음" },
+    { voiceId: "XrExE9yKIg1WjnnlVkGX", name: "Matilda", labels: "여, 미국, 친근" },
+    { voiceId: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice", labels: "여, 영국, 명료" },
+    { voiceId: "XB0fDUnXU5powFXDhCwa", name: "Charlotte", labels: "여, 스웨덴 억양" },
+    { voiceId: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", labels: "여, 영국, 따뜻" },
+    { voiceId: "pNInz6obpgDQGcFmaJgB", name: "Adam", labels: "남, 미국, 깊음" },
+    { voiceId: "onwK4e9ZLuTAKqWW03F9", name: "Daniel", labels: "남, 영국, 뉴스톤" },
+    { voiceId: "nPczCjzI2devNBz1zQrb", name: "Brian", labels: "남, 미국, 내레이션" },
+    { voiceId: "JBFqnCBsd6RMkjVDRZzb", name: "George", labels: "남, 영국, 중후" },
+    { voiceId: "iP95p4xoKVk53GoZ742B", name: "Chris", labels: "남, 미국, 일상 대화" },
+    { voiceId: "cjVigY5qzO86Huf0OWal", name: "Eric", labels: "남, 미국, 친근" },
+    { voiceId: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", labels: "남, 미국, 또렷" },
+    { voiceId: "IKne3meq5aSn9XLyUdCD", name: "Charlie", labels: "남, 호주, 자연스러움" },
+    { voiceId: "N2lVS1w4EtoT3dr4eOWO", name: "Callum", labels: "남, 개성적" },
+    { voiceId: "bIHbv24MWmeRgasZH58o", name: "Will", labels: "남, 미국, 편안" },
+    { voiceId: "pqHfZKP75CvOlQylNhV4", name: "Bill", labels: "남, 미국, 신뢰감" }
+  ];
 
   /** 계정에서 사용 가능한 음성 목록 → [{voiceId, name, labels}] */
   async function listElevenVoices({ apiKey } = {}) {
@@ -431,9 +458,16 @@ JSON만 출력:
     try {
       res = await fetch(`${ELEVEN_BASE}/voices`, { headers: { "xi-api-key": apiKey } });
     } catch (e) {
-      throw new Error("ElevenLabs에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.");
+      throw new Error("ElevenLabs에 연결하지 못했습니다 (네트워크/CORS). 인터넷 연결을 확인해 주세요.");
     }
-    if (!res.ok) throw elevenError(res.status);
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const err = await res.json();
+        detail = err?.detail?.message || err?.detail?.status || (typeof err?.detail === "string" ? err.detail : "");
+      } catch (e) { /* 무시 */ }
+      throw elevenError(res.status, detail);
+    }
     const data = await res.json();
     return (data?.voices || []).map(v => ({
       voiceId: v.voice_id,
@@ -475,6 +509,7 @@ JSON만 출력:
     fetchYoutubeTranscript,
     listElevenVoices,
     fetchElevenAudio,
-    ELEVEN_DEFAULT_VOICE
+    ELEVEN_DEFAULT_VOICE,
+    ELEVEN_PREMADE_VOICES
   };
 })();
