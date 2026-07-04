@@ -1317,3 +1317,65 @@ input:checked + .toggle-slider:before {
     margin: 0 auto;
   }
 }
+
+/* ═══════════════════════════════════════════════
+   v2.0.0 — AI 카드 / 유튜브 / 추천 / TTS 개선 UI
+   ═══════════════════════════════════════════════ */
+
+/* ── 듣기 버튼 스택 (기본 + 느리게) ── */
+.speak-btn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.speak-btn.slow {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+  opacity: 0.85;
+  align-self: center;
+}
+
+/* ── 단어 팝업: AI 문맥 뜻 ── */
+.popup-ai-section {
+  margin-bottom: 14px;
+}
+
+.popup-ai-btn {
+  width: 100%;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.popup-ai-btn:disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.popup-ai-result {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin-top: 10px;
+}
+
+.popup-ai-result:empty {
+  display: none;
+}
+
+.popup-ai-result strong {
+  color: var(--accent-color);
+}
+
+/* ── 설정: API 키 입력 스택 ── */
+.key-input-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.key-input-stack .url-paste-input {
+  width: 100%;
+}

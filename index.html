@@ -42,6 +42,9 @@
           <span id="font-size-quick-label" class="font-quick-label" aria-live="polite">보통</span>
           <button id="font-increase-btn" class="font-quick-btn" type="button" aria-label="글자 크게">A+</button>
         </div>
+        <button id="import-btn" class="icon-btn" aria-label="새 학습 자료 만들기">
+          ➕
+        </button>
         <button id="settings-btn" class="icon-btn" aria-label="설정 열기">
           ⚙️
         </button>
@@ -93,6 +96,10 @@
         <span id="popup-word" class="popup-word">word</span>
         <button id="popup-close" class="popup-close" aria-label="팝업 닫기">&times;</button>
       </div>
+      <div id="popup-ai-section" class="popup-ai-section">
+        <button id="popup-ai-btn" class="dict-btn popup-ai-btn" type="button">✨ AI 문맥 뜻 보기</button>
+        <div id="popup-ai-result" class="popup-ai-result" aria-live="polite"></div>
+      </div>
       <div class="popup-links">
         <a id="dict-naver" href="#" target="_blank" class="dict-btn">
           Naver 사전 🔍
@@ -105,6 +112,60 @@
 
     <!-- ── 어두운 배경 오버레이 (설정 및 팝업용) ── -->
     <div id="dim-overlay" class="dim-overlay"></div>
+
+    <!-- ── 새 학습 자료 만들기 패널 ── -->
+    <aside id="import-panel" class="settings-panel">
+      <div class="settings-header">
+        <h2>새 학습 자료 만들기</h2>
+        <button id="close-import-btn" class="icon-btn" aria-label="패널 닫기">&times;</button>
+      </div>
+
+      <div class="settings-content">
+        <!-- 1단계: 주소 입력 (웹/유튜브 자동 인식) -->
+        <div class="setting-group">
+          <label>1단계 — 웹주소 또는 유튜브 주소 입력</label>
+          <div class="url-import-row">
+            <input id="url-paste" class="url-paste-input" type="url" inputmode="url"
+                   placeholder="기사 URL 또는 https://youtube.com/watch?v=...">
+            <button id="url-import-btn" class="submit-btn url-import-btn">추출</button>
+          </div>
+          <div id="url-import-status" class="url-import-status" aria-live="polite">
+            * 유튜브 주소는 youtubetotext.ai 자막으로, 일반 웹주소는 본문 추출로 자동 처리됩니다.
+          </div>
+        </div>
+
+        <!-- 2단계: 텍스트 확인 및 카드 생성 -->
+        <div class="setting-group">
+          <label>2단계 — 영문 텍스트 확인 (직접 붙여넣기도 가능)</label>
+          <textarea id="text-paste" class="text-paste-area"
+                    placeholder="추출된 영문이 여기에 들어옵니다.&#10;영문 기사, 대본, 가사를 직접 붙여넣어도 됩니다."></textarea>
+          <button id="text-submit-btn" class="submit-btn">🤖 AI 학습 카드 만들기</button>
+          <div id="import-progress" class="url-import-status" aria-live="polite">
+            * Gemini API 키가 있으면 AI가 번역·단어·구문 해설까지 만들어 줍니다. 키가 없으면 기본 방식으로 만듭니다.
+          </div>
+        </div>
+
+        <!-- 파일 업로드 -->
+        <div class="setting-group">
+          <label>파일에서 가져오기</label>
+          <label for="file-upload" class="file-input-label">
+            📁 HTML / JSON / TXT 파일 가져오기
+            <input type="file" id="file-upload" accept=".html,.htm,.json,.txt">
+          </label>
+        </div>
+
+        <!-- AI 추천 학습 자료 -->
+        <div class="setting-group" style="padding-top: 16px; border-top: 1px solid var(--border-color);">
+          <label>🎯 관심분야 AI 추천 자료</label>
+          <input id="interest-input" class="url-paste-input" type="text"
+                 placeholder="관심분야 입력 (예: 우주, AI, 테슬라, 경제)">
+          <button id="recommend-btn" class="submit-btn" style="margin-top: 8px;">오늘의 추천 학습 글 생성</button>
+          <div id="recommend-status" class="url-import-status" aria-live="polite">
+            * 관심분야와 영어 수준에 맞는 독해 지문을 AI가 새로 써서 카드로 만들어 줍니다.
+          </div>
+        </div>
+      </div>
+    </aside>
 
     <!-- ── 우측 슬라이드-인 설정 패널 ── -->
     <aside id="settings-panel" class="settings-panel">
@@ -140,12 +201,12 @@
                 <p>중요한 문장은 ★로 저장하세요. 하단의 ★ 즐겨찾기 탭에서 저장한 문장만 빠르게 다시 볼 수 있습니다.</p>
               </section>
               <section>
-                <h3>4. 새 영어 자료 넣기</h3>
-                <p>HTML/JSON/TXT 파일을 업로드하거나, 웹주소를 넣어 핵심 영어 문단을 추출하거나, 영문 텍스트를 직접 붙여넣을 수 있습니다.</p>
+                <h3>4. 새 영어 자료 넣기 (➕ 버튼)</h3>
+                <p>상단 ➕ 버튼을 누르면 새 자료 패널이 열립니다. 유튜브 주소를 넣으면 자막을, 일반 웹주소를 넣으면 본문을 추출하고, 영문 텍스트를 직접 붙여넣을 수도 있습니다.</p>
               </section>
               <section>
-                <h3>5. 자동 보강</h3>
-                <p>번역이 없는 영어 자료는 자동으로 한국어 번역과 단어 설명을 보강합니다. 결과가 마음에 들지 않으면 텍스트칸에서 수정한 뒤 저장하세요.</p>
+                <h3>5. AI 카드 생성과 추천</h3>
+                <p>설정에 Gemini API 키를 넣으면 AI가 번역·단어 뜻·구문 해설을 만들어 주고, 관심분야에 맞는 오늘의 학습 글도 생성할 수 있습니다. 키가 없으면 기본 자동 보강 방식으로 동작합니다.</p>
               </section>
             </div>
           </details>
@@ -242,47 +303,35 @@
           </div>
         </div>
 
-        <!-- ── 영어 학습 문장 파일 입력 및 임포트 ── -->
+        <!-- ── AI / API 키 설정 ── -->
         <div class="setting-group" style="margin-top: 10px; padding-top: 20px; border-top: 1px solid var(--border-color);">
-          <label>학습용 새 영어 파일 가져오기</label>
-          <div class="file-manager-box">
-            <!-- 방법 A: 파일 탐색기 업로드 -->
-            <label for="file-upload" class="file-input-label">
-              📁 HTML / JSON / TXT 파일 가져오기
-              <input type="file" id="file-upload" accept=".html,.htm,.json,.txt">
-            </label>
-            
-            <div style="font-size: 11px; color: var(--text-muted); text-align: center; margin: -4px 0 4px;">
-              * 전용 HTML, 일반 HTML 문서, JSON, TXT를 그대로 넣을 수 있습니다.
-            </div>
-
-            <!-- 방법 B: 웹주소에서 핵심 영어 추출 -->
-            <div style="font-size: 12px; color: var(--text-main); font-weight: 700; margin-top: 8px;">
-              웹주소에서 핵심 영어 추출
-            </div>
-            <div class="url-import-row">
-              <input id="url-paste" class="url-paste-input" type="url" inputmode="url" placeholder="예: https://www.spacex.com/mission">
-              <button id="url-import-btn" class="submit-btn url-import-btn">추출</button>
-            </div>
-            <div id="url-import-status" class="url-import-status" aria-live="polite">
-              * 웹페이지의 핵심 영어 문단을 아래 텍스트칸에 붙여넣습니다. CORS 차단 시 읽기용 텍스트 프록시를 사용합니다.
-            </div>
-
-            <!-- 방법 C: 직접 복사 붙여넣기 -->
-            <div style="font-size: 12px; color: var(--text-main); font-weight: 700; margin-top: 8px;">
-              영문 텍스트 직접 붙여넣기
-            </div>
-            <textarea id="text-paste" class="text-paste-area" placeholder="영문 기사, 대본, 가사, 문단을 그대로 붙여넣으세요.&#10;웹주소 추출 결과도 여기에 자동으로 들어옵니다.&#10;&#10;번역이 있으면 기존 형식도 가능:&#10;영어 문장 | 한국어 번역 | 단어=뜻;단어2=뜻"></textarea>
-            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">
-              * 순수 영문만 붙여넣어도 문장/줄 단위 카드로 나누고, 번역·단어 설명을 자동 보강합니다.
-            </div>
-            <button id="text-submit-btn" class="submit-btn">영문 텍스트로 카드 만들기</button>
+          <label>AI / API 키 설정</label>
+          <div class="key-input-stack">
+            <input id="gemini-key-input" class="url-paste-input" type="password" autocomplete="off"
+                   placeholder="Google AI Studio (Gemini) API 키">
+            <input id="ytt-key-input" class="url-paste-input" type="password" autocomplete="off"
+                   placeholder="youtubetotext.ai API 키">
           </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.5;">
+            * 키는 이 기기 브라우저에만 저장됩니다.<br>
+            * Gemini 키: <strong>aistudio.google.com</strong> → Get API Key에서 발급.<br>
+            * Gemini 키가 있으면 AI 카드 생성·문맥 단어 뜻·추천 자료 기능이 켜집니다.
+          </div>
+        </div>
+
+        <!-- ── 영어 수준 설정 ── -->
+        <div class="setting-group">
+          <label>내 영어 수준 (AI 카드·추천에 반영)</label>
+          <select id="level-select" class="settings-select" title="영어 수준 선택">
+            <option value="beginner">초급 — 쉬운 단어, 친절한 해설</option>
+            <option value="intermediate">중급 — 일반 기사/인터뷰 수준</option>
+            <option value="advanced">고급 — 관용 표현, 뉘앙스 중심</option>
+          </select>
         </div>
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v1.3.8 · Smartphone English Study PWA<br>
+          영한번역 v2.0.0 · Smartphone English Study PWA<br>
           Developer: NULMARU · © 2026 NULMARU<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>
@@ -293,6 +342,7 @@
 
   <!-- 자바스크립트 로딩 -->
   <script src="default_data.js"></script>
+  <script src="ai.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

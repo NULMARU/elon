@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v1.3.8 - 즐겨찾기 복습 모드 / PWA / IndexedDB 저장소 / 파일별 진도 / 주화면 글자 크기 조절
+ * v2.0.0 - AI 학습 카드(Gemini) / 유튜브 자막(youtubetotext.ai) / 관심분야 추천 / TTS 개선
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -21,7 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
       alwaysShowTranslation: true,
       cardDensity: "medium",       // 카드 분량: "short" | "medium" | "long" (임포트 시 청킹 기준)
       autoEnrichImports: true,     // 업로드 자료에 번역/설명이 없을 때 자동 보강
-      externalAutoTranslate: true  // 번역 누락 시 외부 번역 서비스 사용 (문장 단위 전송)
+      externalAutoTranslate: true, // 번역 누락 시 외부 번역 서비스 사용 (문장 단위 전송)
+      geminiApiKey: "",            // Google AI Studio (Gemini) API 키 — AI 카드/추천/문맥 뜻
+      yttApiKey: "",               // youtubetotext.ai API 키 — 유튜브 자막 추출
+      interests: "",               // 관심분야 (추천 자료 생성용)
+      englishLevel: "intermediate" // 영어 수준: "beginner" | "intermediate" | "advanced"
     },
     // 사용자 추가 파일 메모리 캐시 { id: { title, data:[...], createdAt, updatedAt } }
     // 진실 원본(source of truth)은 IndexedDB (미지원 시 localStorage 폴백)
@@ -78,13 +82,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const cardDensitySlider = document.getElementById("card-density-slider");
   const cardDensityVal = document.getElementById("card-density-val");
 
-  // 파일 추가 입력기
+  // 파일 추가 입력기 (새 자료 패널)
+  const importBtn = document.getElementById("import-btn");
+  const importPanel = document.getElementById("import-panel");
+  const closeImportBtn = document.getElementById("close-import-btn");
   const fileUploadInput = document.getElementById("file-upload");
   const urlPasteInput = document.getElementById("url-paste");
   const urlImportBtn = document.getElementById("url-import-btn");
   const urlImportStatus = document.getElementById("url-import-status");
   const textPasteArea = document.getElementById("text-paste");
   const textSubmitBtn = document.getElementById("text-submit-btn");
+  const importProgress = document.getElementById("import-progress");
+  const interestInput = document.getElementById("interest-input");
+  const recommendBtn = document.getElementById("recommend-btn");
+  const recommendStatus = document.getElementById("recommend-status");
+
+  // AI/API 키·수준 설정
+  const geminiKeyInput = document.getElementById("gemini-key-input");
+  const yttKeyInput = document.getElementById("ytt-key-input");
+  const levelSelect = document.getElementById("level-select");
 
   // 미니 단어 검색 팝업
   const wordPopup = document.getElementById("word-popup");
@@ -92,6 +108,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const popupClose = document.getElementById("popup-close");
   const dictNaver = document.getElementById("dict-naver");
   const dictCambridge = document.getElementById("dict-cambridge");
+  const popupAiSection = document.getElementById("popup-ai-section");
+  const popupAiBtn = document.getElementById("popup-ai-btn");
+  const popupAiResult = document.getElementById("popup-ai-result");
 
   // ── 보안: HTML 이스케이프 헬퍼 (작은따옴표는 의도적으로 보존: 영어 축약형 표시용) ──
   function escapeHtml(str) {
@@ -297,6 +316,10 @@ document.addEventListener("DOMContentLoaded", () => {
       ttsSpeedSlider.value = state.settings.ttsSpeed;
       ttsSpeedVal.textContent = `${Number(state.settings.ttsSpeed).toFixed(2)}x`;
     }
+    if (geminiKeyInput) geminiKeyInput.value = state.settings.geminiApiKey;
+    if (yttKeyInput) yttKeyInput.value = state.settings.yttApiKey;
+    if (levelSelect) levelSelect.value = state.settings.englishLevel;
+    if (interestInput) interestInput.value = state.settings.interests;
     syncDensityUI();
 
     setupTTSVoices();
@@ -331,6 +354,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedDensity = localStorage.getItem("yh_cardDensity") || "medium";
       const savedAutoEnrich = localStorage.getItem("yh_autoEnrichImports") !== "false"; // 기본값 true
       const savedExternalTranslate = localStorage.getItem("yh_externalAutoTranslate") !== "false"; // 기본값 true
+      const savedGeminiKey = localStorage.getItem("yh_geminiApiKey") || "";
+      const savedYttKey = localStorage.getItem("yh_yttApiKey") || "";
+      const savedInterests = localStorage.getItem("yh_interests") || "";
+      const savedLevel = localStorage.getItem("yh_englishLevel") || "intermediate";
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
       const savedMode = localStorage.getItem("yh_mode") === "starred" ? "starred" : "all";
 
@@ -346,7 +373,11 @@ document.addEventListener("DOMContentLoaded", () => {
         alwaysShowTranslation: savedAlwaysShow,
         cardDensity: (["short", "medium", "long"].includes(savedDensity) ? savedDensity : "medium"),
         autoEnrichImports: savedAutoEnrich,
-        externalAutoTranslate: savedExternalTranslate
+        externalAutoTranslate: savedExternalTranslate,
+        geminiApiKey: savedGeminiKey,
+        yttApiKey: savedYttKey,
+        interests: savedInterests,
+        englishLevel: (["beginner", "intermediate", "advanced"].includes(savedLevel) ? savedLevel : "intermediate")
       };
 
       state.currentFileId = savedCurrentFile;
@@ -369,6 +400,10 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("yh_cardDensity", state.settings.cardDensity);
       localStorage.setItem("yh_autoEnrichImports", state.settings.autoEnrichImports);
       localStorage.setItem("yh_externalAutoTranslate", state.settings.externalAutoTranslate);
+      localStorage.setItem("yh_geminiApiKey", state.settings.geminiApiKey);
+      localStorage.setItem("yh_yttApiKey", state.settings.yttApiKey);
+      localStorage.setItem("yh_interests", state.settings.interests);
+      localStorage.setItem("yh_englishLevel", state.settings.englishLevel);
     } catch (e) {
       console.error("설정 저장 실패:", e);
     }
@@ -430,14 +465,32 @@ document.addEventListener("DOMContentLoaded", () => {
     setupFontSize(FONT_SIZE_ORDER[nextIndex]);
   }
 
-  // ── TTS 목소리 목록 구성 ──
+  // ── TTS 목소리 품질 점수 (기기별 최적 음성 자동 선택) ──
+  // Android Chrome: Google 네트워크 음성이 가장 자연스러움.
+  // Windows: Microsoft Natural/Online 음성. macOS/iOS: Siri/Premium/Enhanced 음성.
+  function scoreVoice(voice) {
+    const name = voice.name || "";
+    const lang = voice.lang || "";
+    let score = 0;
+    if (/google/i.test(name)) score += 10;
+    if (/natural|neural|online/i.test(name)) score += 8;
+    if (/premium|enhanced|siri/i.test(name)) score += 6;
+    if (lang === "en-US") score += 4;
+    else if (lang === "en-GB") score += 3;
+    if (/espeak|compact|albert|bad news|bells|boing|bubbles|cellos|jester|organ|superstar|trinoids|whisper|wobble|zarvox/i.test(name)) score -= 10;
+    return score;
+  }
+
+  // ── TTS 목소리 목록 구성 (품질 순 정렬 + 최적 음성 자동 선택) ──
   function setupTTSVoices() {
     if (typeof speechSynthesis === "undefined") return;
 
     availableVoices = window.speechSynthesis.getVoices();
     voiceSelect.innerHTML = "";
 
-    const enVoices = availableVoices.filter(v => v.lang && v.lang.startsWith("en-"));
+    const enVoices = availableVoices
+      .filter(v => v.lang && v.lang.startsWith("en-"))
+      .sort((a, b) => scoreVoice(b) - scoreVoice(a));
 
     if (enVoices.length === 0) {
       const option = document.createElement("option");
@@ -447,20 +500,23 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    enVoices.forEach(voice => {
+    // 저장된 음성이 없거나 기기에서 사라졌으면 가장 좋은 음성으로 자동 선택
+    const savedExists = enVoices.some(v => v.name === state.settings.ttsVoice);
+    if (!savedExists) {
+      state.settings.ttsVoice = enVoices[0].name;
+      saveSettingsToStorage();
+    }
+
+    enVoices.forEach((voice, index) => {
       const option = document.createElement("option");
       option.value = voice.name;
-      option.textContent = `${voice.name} (${voice.lang})`;
+      const mark = index === 0 ? "★ " : "";
+      option.textContent = `${mark}${voice.name} (${voice.lang})`;
       if (voice.name === state.settings.ttsVoice) {
         option.selected = true;
       }
       voiceSelect.appendChild(option);
     });
-
-    if (!state.settings.ttsVoice && enVoices.length > 0) {
-      state.settings.ttsVoice = enVoices[0].name;
-      saveSettingsToStorage();
-    }
   }
 
   // ── 파일 선택 드롭다운 및 대시보드 채우기 ──
@@ -629,7 +685,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── 메인 카드 렌더링 ──
   function renderCurrentSentence() {
     if (typeof speechSynthesis !== "undefined") {
-      window.speechSynthesis.cancel();
+      stopSpeaking(); // 청크 재생 세션까지 완전히 중단
     }
 
     const dataset = getCurrentDataset();
@@ -673,7 +729,10 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="sentence-en" id="sentence-en-text">
             ${makeWordsClickable(data.en)}
           </div>
-          <button class="speak-btn" id="card-speak-btn" aria-label="문장 듣기">🔊</button>
+          <div class="speak-btn-stack">
+            <button class="speak-btn" id="card-speak-btn" aria-label="문장 듣기">🔊</button>
+            <button class="speak-btn slow" id="card-speak-slow-btn" aria-label="느리게 듣기" title="느리게 듣기 (0.7x)">🐢</button>
+          </div>
         </div>
       </div>
 
@@ -823,33 +882,104 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── TTS 음성 합성 발음 (Web Speech API) ──
-  function speak(text) {
+  // 긴 문장은 청크(문장/절)로 나누어 순차 재생 → Android Chrome의 긴 발화 끊김 문제 방지
+  let speechToken = 0; // 재생 세션 토큰 (취소 시 이후 청크 재생 중단)
+  let speechKeepAlive = null;
+  const IS_MOBILE_UA = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  function splitForSpeech(text) {
+    const clean = String(text || "").replace(/<\/?[^>]+(>|$)/g, "").trim();
+    if (!clean) return [];
+    const MAX_CHUNK = 200;
+
+    const chunks = [];
+    splitIntoSentences(clean).forEach(sentence => {
+      let s = sentence.trim();
+      while (s.length > MAX_CHUNK) {
+        // 쉼표/세미콜론/대시 근처에서 자연스럽게 절단
+        let cut = -1;
+        for (const sep of [", ", "; ", " — ", " – ", " - "]) {
+          const idx = s.lastIndexOf(sep, MAX_CHUNK);
+          if (idx > cut) cut = idx + sep.length - 1;
+        }
+        if (cut < MAX_CHUNK * 0.3) cut = s.lastIndexOf(" ", MAX_CHUNK);
+        if (cut <= 0) cut = MAX_CHUNK;
+        chunks.push(s.slice(0, cut).trim());
+        s = s.slice(cut).trim();
+      }
+      if (s) chunks.push(s);
+    });
+    return chunks.filter(Boolean);
+  }
+
+  function stopSpeaking() {
+    speechToken += 1;
+    if (speechKeepAlive) {
+      clearInterval(speechKeepAlive);
+      speechKeepAlive = null;
+    }
+    window.speechSynthesis.cancel();
+    setSpeakButtonActive(false);
+  }
+
+  function speak(text, options = {}) {
     if (typeof speechSynthesis === "undefined") return;
 
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-      setSpeakButtonActive(false);
+    // 재생 중 다시 누르면 정지 (토글)
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      stopSpeaking();
       return;
     }
 
-    const cleanText = text.replace(/<\/?[^>]+(>|$)/g, "");
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = "en-US";
-    utterance.rate = state.settings.ttsSpeed;
+    const chunks = splitForSpeech(text);
+    if (chunks.length === 0) return;
 
-    if (state.settings.ttsVoice) {
-      const selectedVoice = availableVoices.find(v => v.name === state.settings.ttsVoice);
+    const myToken = ++speechToken;
+    const rate = options.rate != null ? options.rate : state.settings.ttsSpeed;
+    const selectedVoice = state.settings.ttsVoice
+      ? availableVoices.find(v => v.name === state.settings.ttsVoice)
+      : null;
+
+    setSpeakButtonActive(true);
+
+    // 데스크톱 Chrome은 15초쯤에서 네트워크 음성이 멈추는 버그가 있어 pause/resume으로 유지
+    if (!IS_MOBILE_UA && !speechKeepAlive) {
+      speechKeepAlive = setInterval(() => {
+        if (window.speechSynthesis.speaking) {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        }
+      }, 10000);
+    }
+
+    const finish = () => {
+      if (myToken !== speechToken) return;
+      if (speechKeepAlive) {
+        clearInterval(speechKeepAlive);
+        speechKeepAlive = null;
+      }
+      setSpeakButtonActive(false);
+    };
+
+    const playChunk = (index) => {
+      if (myToken !== speechToken) return;
+      if (index >= chunks.length) {
+        finish();
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(chunks[index]);
+      utterance.lang = "en-US";
+      utterance.rate = rate;
       if (selectedVoice) {
         utterance.voice = selectedVoice;
         utterance.lang = selectedVoice.lang;
       }
-    }
+      utterance.onend = () => playChunk(index + 1);
+      utterance.onerror = finish;
+      window.speechSynthesis.speak(utterance);
+    };
 
-    utterance.onstart = () => setSpeakButtonActive(true);
-    utterance.onend = () => setSpeakButtonActive(false);
-    utterance.onerror = () => setSpeakButtonActive(false);
-
-    window.speechSynthesis.speak(utterance);
+    playChunk(0);
   }
 
   function setSpeakButtonActive(active) {
@@ -885,28 +1015,51 @@ document.addEventListener("DOMContentLoaded", () => {
     popupWord.textContent = cleanWord;
     dictNaver.href = `https://en.dict.naver.com/#/search?query=${encodeURIComponent(cleanWord)}`;
     dictCambridge.href = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(cleanWord)}`;
+
+    // AI 문맥 뜻: Gemini 키가 있을 때만 노출, 열 때마다 결과 초기화
+    if (popupAiSection) {
+      popupAiSection.style.display = state.settings.geminiApiKey ? "" : "none";
+      if (popupAiResult) popupAiResult.textContent = "";
+      if (popupAiBtn) popupAiBtn.disabled = false;
+    }
+
     wordPopup.classList.add("active");
     dimOverlay.classList.add("active");
   }
 
   function hideWordPopup() {
     wordPopup.classList.remove("active");
-    if (!settingsPanel.classList.contains("active")) {
-      dimOverlay.classList.remove("active");
-    }
+    syncDimOverlay();
   }
 
-  // ── 설정창 제어 ──
+  // ── 패널/오버레이 제어 (설정 · 새 자료 · 단어 팝업) ──
+  function syncDimOverlay() {
+    const anyOpen = settingsPanel.classList.contains("active")
+      || (importPanel && importPanel.classList.contains("active"))
+      || wordPopup.classList.contains("active");
+    dimOverlay.classList.toggle("active", anyOpen);
+  }
+
   function openSettings() {
+    if (importPanel) importPanel.classList.remove("active");
     settingsPanel.classList.add("active");
-    dimOverlay.classList.add("active");
+    syncDimOverlay();
   }
 
   function closeSettings() {
     settingsPanel.classList.remove("active");
-    if (!wordPopup.classList.contains("active")) {
-      dimOverlay.classList.remove("active");
-    }
+    syncDimOverlay();
+  }
+
+  function openImportPanel() {
+    settingsPanel.classList.remove("active");
+    if (importPanel) importPanel.classList.add("active");
+    syncDimOverlay();
+  }
+
+  function closeImportPanel() {
+    if (importPanel) importPanel.classList.remove("active");
+    syncDimOverlay();
   }
 
   // ───────────────────────────────────────────────────────────
@@ -2637,28 +2790,25 @@ document.addEventListener("DOMContentLoaded", () => {
     renderCurrentSentence();
   }
 
-  async function loadAndActivateNewDataset(title, rawParsed) {
-    if (!rawParsed || rawParsed.length === 0) {
-      alert("파싱된 문장 데이터가 없습니다. 포맷을 다시 확인해 주세요.");
-      return;
-    }
-
-    const enrichResult = await enrichImportedDataset(rawParsed);
-    const enrichedRaw = enrichResult.cards;
-
-    // 임포트 시점에 분량 최적화 알고리즘 적용 (원본은 rawData로 보존 → 분량 재조정 가능)
-    const density = state.settings.cardDensity;
-    const data = segmentDataset(enrichedRaw, density);
-
+  // 공통: 카드 데이터셋을 저장하고 즉시 학습 화면에 활성화
+  async function persistAndActivateDataset(title, rawData, data, extra = {}) {
     const fileId = `file_${Date.now()}`;
     const now = Date.now();
-    const fileObj = { title, rawData: enrichedRaw, data, density, createdAt: now, updatedAt: now };
-    state.customFiles[fileId] = { title, rawData: enrichedRaw, data, density, createdAt: now, updatedAt: now };
+    const fileObj = {
+      title,
+      rawData,
+      data,
+      density: state.settings.cardDensity,
+      aiGenerated: !!extra.aiGenerated,
+      createdAt: now,
+      updatedAt: now
+    };
+    state.customFiles[fileId] = { ...fileObj };
 
     const ok = await saveCustomFile(fileId, fileObj);
     if (!ok) {
       delete state.customFiles[fileId]; // 저장 실패 시 롤백
-      return;
+      return false;
     }
 
     state.currentFileId = fileId;
@@ -2670,18 +2820,86 @@ document.addEventListener("DOMContentLoaded", () => {
     saveStateToStorage();
     populateFileDropdown();
     renderCurrentSentence();
+    return true;
+  }
+
+  async function loadAndActivateNewDataset(title, rawParsed) {
+    if (!rawParsed || rawParsed.length === 0) {
+      alert("파싱된 문장 데이터가 없습니다. 포맷을 다시 확인해 주세요.");
+      return;
+    }
+
+    const enrichResult = await enrichImportedDataset(rawParsed);
+    const enrichedRaw = enrichResult.cards;
+
+    // 임포트 시점에 분량 최적화 알고리즘 적용 (원본은 rawData로 보존 → 분량 재조정 가능)
+    const data = segmentDataset(enrichedRaw, state.settings.cardDensity);
+
+    const ok = await persistAndActivateDataset(title, enrichedRaw, data);
+    if (!ok) return;
 
     const enrichLine = state.settings.autoEnrichImports
       ? `\n자동 보강: 번역 ${enrichResult.translated}개, 단어/설명 ${enrichResult.notesAdded}개${enrichResult.fallbackTranslations ? `, 번역 실패 ${enrichResult.fallbackTranslations}개` : ""}`
       : "";
     alert(`성공! [${title}]\n원문 ${rawParsed.length}개 → 분량 최적화 후 ${data.length}개 카드로 구성되었습니다.${enrichLine}`);
     closeSettings();
+    closeImportPanel();
   }
 
-  function setImportBusy(isBusy, label = "자동 보강 중…") {
+  // ── AI(Gemini) 카드 생성 경로: 영문 텍스트 → 카드 (번역·단어·구문 해설 포함) ──
+  async function createCardsWithAI(text, fallbackTitle) {
+    const { title, cards } = await YHAI.generateCards(text, {
+      apiKey: state.settings.geminiApiKey,
+      density: state.settings.cardDensity,
+      level: state.settings.englishLevel,
+      onProgress: (msg) => setImportProgress(msg)
+    });
+
+    const idPrefix = `ai_${Date.now()}`;
+    const withIds = cards.map((card, i) => ({
+      id: `${idPrefix}_${i}`,
+      speaker: card.speaker,
+      en: card.en,
+      ko: card.ko,
+      notes: card.notes,
+      preserveUnit: true // AI가 분량을 이미 결정 → 휴리스틱 재병합 방지
+    }));
+
+    const finalTitle = fallbackTitle || title;
+    const ok = await persistAndActivateDataset(finalTitle, withIds, withIds, { aiGenerated: true });
+    if (!ok) return;
+
+    alert(`성공! [${finalTitle}]\nAI가 ${withIds.length}개의 학습 카드를 만들었습니다.`);
+    closeImportPanel();
+  }
+
+  // 텍스트 → 카드 만들기 공통 진입점 (Gemini 키가 있으면 AI, 없거나 실패하면 기본 방식)
+  async function createCardsFromText(text, fallbackTitle) {
+    if (state.settings.geminiApiKey && typeof YHAI !== "undefined") {
+      try {
+        await createCardsWithAI(text, fallbackTitle);
+        return;
+      } catch (err) {
+        console.error("AI 카드 생성 실패:", err);
+        const useFallback = confirm(`AI 카드 생성에 실패했습니다:\n${err.message}\n\n기본 방식(자동 번역 + 규칙 기반)으로 대신 만들까요?`);
+        if (!useFallback) return;
+      }
+    }
+
+    setImportProgress("기본 방식으로 카드 생성 중…");
+    const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, "직접입력_HTML") : parseRawText(text);
+    if (parsed.length === 0) {
+      alert("파싱에 실패했습니다. 영문 텍스트가 맞는지 확인해 주세요.");
+      return;
+    }
+    const title = fallbackTitle || `직접 입력 카드 (${parsed.length}문장)`;
+    await loadAndActivateNewDataset(title, parsed);
+  }
+
+  function setImportBusy(isBusy, label = "카드 생성 중…") {
     if (textSubmitBtn) {
       textSubmitBtn.disabled = isBusy;
-      textSubmitBtn.textContent = isBusy ? label : "영문 텍스트로 카드 만들기";
+      textSubmitBtn.textContent = isBusy ? label : "🤖 AI 학습 카드 만들기";
     }
     if (urlImportBtn) {
       urlImportBtn.disabled = isBusy;
@@ -2693,6 +2911,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (fileUploadInput) {
       fileUploadInput.disabled = isBusy;
     }
+    if (recommendBtn) {
+      recommendBtn.disabled = isBusy;
+    }
+    if (!isBusy) setImportProgress("");
   }
 
   function setUrlImportStatus(message, type = "") {
@@ -2702,12 +2924,29 @@ document.addEventListener("DOMContentLoaded", () => {
     if (type) urlImportStatus.classList.add(type);
   }
 
+  function setImportProgress(message, type = "") {
+    if (!importProgress) return;
+    importProgress.textContent = message;
+    importProgress.classList.remove("success", "error");
+    if (type) importProgress.classList.add(type);
+  }
+
+  function setRecommendStatus(message, type = "") {
+    if (!recommendStatus) return;
+    recommendStatus.textContent = message;
+    recommendStatus.classList.remove("success", "error");
+    if (type) recommendStatus.classList.add(type);
+  }
+
   // ── 이벤트 핸들러 바인딩 ──
   function bindEvents() {
     settingsBtn.addEventListener("click", openSettings);
     closeSettingsBtn.addEventListener("click", closeSettings);
+    if (importBtn) importBtn.addEventListener("click", openImportPanel);
+    if (closeImportBtn) closeImportBtn.addEventListener("click", closeImportPanel);
     dimOverlay.addEventListener("click", () => {
       closeSettings();
+      closeImportPanel();
       hideWordPopup();
     });
 
@@ -2741,6 +2980,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (e.target.closest("#card-speak-btn")) {
         if (currentSentence) speak(currentSentence.en);
+        return;
+      }
+      if (e.target.closest("#card-speak-slow-btn")) {
+        if (currentSentence) speak(currentSentence.en, { rate: 0.7 });
         return;
       }
       if (e.target.closest("#empty-back-btn")) {
@@ -2839,7 +3082,59 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
+    // 설정: AI/API 키
+    if (geminiKeyInput) {
+      geminiKeyInput.addEventListener("change", (e) => {
+        state.settings.geminiApiKey = e.target.value.trim();
+        saveSettingsToStorage();
+      });
+    }
+    if (yttKeyInput) {
+      yttKeyInput.addEventListener("change", (e) => {
+        state.settings.yttApiKey = e.target.value.trim();
+        saveSettingsToStorage();
+      });
+    }
+
+    // 설정: 영어 수준
+    if (levelSelect) {
+      levelSelect.addEventListener("change", (e) => {
+        state.settings.englishLevel = e.target.value;
+        saveSettingsToStorage();
+      });
+    }
+
+    // 관심분야 입력 저장
+    if (interestInput) {
+      interestInput.addEventListener("change", (e) => {
+        state.settings.interests = e.target.value.trim();
+        saveSettingsToStorage();
+      });
+    }
+
     popupClose.addEventListener("click", hideWordPopup);
+
+    // 단어 팝업: AI 문맥 뜻 보기
+    if (popupAiBtn) {
+      popupAiBtn.addEventListener("click", async () => {
+        const word = popupWord.textContent;
+        const sentence = currentSentence?.en || "";
+        if (!word || !state.settings.geminiApiKey) return;
+
+        popupAiBtn.disabled = true;
+        popupAiResult.textContent = "AI가 문맥을 읽는 중…";
+        try {
+          const { meaning, note } = await YHAI.explainWordInContext(word, sentence, {
+            apiKey: state.settings.geminiApiKey
+          });
+          popupAiResult.innerHTML = `<strong>${escapeHtml(meaning)}</strong>${note ? `<br>${escapeHtml(note)}` : ""}`;
+        } catch (err) {
+          popupAiResult.textContent = `불러오기 실패: ${err.message}`;
+        } finally {
+          popupAiBtn.disabled = false;
+        }
+      });
+    }
 
     // 파일 업로드
     fileUploadInput.addEventListener("change", (e) => {
@@ -2877,33 +3172,53 @@ document.addEventListener("DOMContentLoaded", () => {
       e.target.value = "";
     });
 
-    // 웹주소에서 핵심 영어 추출 → 아래 텍스트칸에 붙여넣기
+    // 웹주소/유튜브 주소에서 영문 추출 → 아래 텍스트칸에 붙여넣기
     if (urlImportBtn && urlPasteInput) {
       urlImportBtn.addEventListener("click", async () => {
         const urlText = urlPasteInput.value.trim();
         if (!urlText) {
-          alert("가져올 웹주소를 입력해 주세요.");
+          alert("가져올 웹주소 또는 유튜브 주소를 입력해 주세요.");
           return;
         }
 
-        setImportBusy(true, "웹 추출 중…");
-        setUrlImportStatus("웹페이지를 읽고 핵심 영어 문단을 고르는 중입니다...");
-        try {
-          const result = await extractLearningTextFromUrl(urlText);
-          const parsed = parseRawText(result.text);
-          if (parsed.length === 0) {
-            throw new Error("학습 카드로 만들 수 있는 영어 문장을 찾지 못했습니다.");
-          }
+        const isYoutube = typeof YHAI !== "undefined" && YHAI.isYoutubeUrl(urlText);
 
-          textPasteArea.value = result.text;
-          pendingWebImport = { title: result.title, sourceUrl: result.sourceUrl };
-          setUrlImportStatus(
-            `추출 완료: 핵심 문단 ${result.paragraphCount}개, 예상 카드 ${parsed.length}개가 아래 텍스트칸에 들어갔습니다. 확인 후 '영문 텍스트로 카드 만들기'를 누르세요.`,
-            "success"
-          );
+        if (isYoutube && !state.settings.yttApiKey) {
+          alert("유튜브 자막을 가져오려면 설정에서 youtubetotext.ai API 키를 먼저 입력해 주세요.");
+          openSettings();
+          return;
+        }
+
+        setImportBusy(true, isYoutube ? "유튜브 자막 추출 중…" : "웹 추출 중…");
+        try {
+          if (isYoutube) {
+            setUrlImportStatus("유튜브 자막 작업을 시작했습니다. 영상 길이에 따라 몇 분 걸릴 수 있습니다…");
+            const result = await YHAI.fetchYoutubeTranscript(urlText, {
+              apiKey: state.settings.yttApiKey,
+              onProgress: (msg) => setUrlImportStatus(msg)
+            });
+            textPasteArea.value = result.text;
+            pendingWebImport = { title: `유튜브 (${result.videoId || "영상"})`, sourceUrl: urlText, fromYoutube: true };
+            setUrlImportStatus(
+              "유튜브 자막 추출 완료! 아래 텍스트를 확인한 뒤 'AI 학습 카드 만들기'를 누르세요.",
+              "success"
+            );
+          } else {
+            setUrlImportStatus("웹페이지를 읽고 핵심 영어 문단을 고르는 중입니다...");
+            const result = await extractLearningTextFromUrl(urlText);
+            const parsed = parseRawText(result.text);
+            if (parsed.length === 0) {
+              throw new Error("학습 카드로 만들 수 있는 영어 문장을 찾지 못했습니다.");
+            }
+            textPasteArea.value = result.text;
+            pendingWebImport = { title: result.title, sourceUrl: result.sourceUrl };
+            setUrlImportStatus(
+              `추출 완료: 핵심 문단 ${result.paragraphCount}개가 아래 텍스트칸에 들어갔습니다. 확인 후 'AI 학습 카드 만들기'를 누르세요.`,
+              "success"
+            );
+          }
         } catch (err) {
-          setUrlImportStatus("웹 추출 실패: 파일 업로드 또는 직접 붙여넣기를 사용해 주세요.", "error");
-          alert(`웹주소 추출에 실패했습니다:\n${err.message}`);
+          setUrlImportStatus(`추출 실패: ${err.message}`, "error");
         } finally {
           setImportBusy(false);
         }
@@ -2917,33 +3232,89 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // 직접 붙여넣기
+    // 텍스트 → 카드 만들기 (Gemini 키가 있으면 AI, 없으면 기본 방식)
     textSubmitBtn.addEventListener("click", async () => {
       const text = textPasteArea.value.trim();
       if (!text) {
-        alert("붙여넣을 텍스트 내용을 입력해 주세요.");
+        alert("텍스트칸이 비어 있습니다. 주소를 추출하거나 영문을 붙여넣어 주세요.");
         return;
       }
-      setImportBusy(true);
+      setImportBusy(true, "카드 생성 중…");
       try {
-        const parsed = looksLikeHtml(text) ? parseHtmlTranscript(text, "직접입력_HTML") : parseRawText(text);
-        if (parsed.length === 0) {
-          alert("파싱에 실패했습니다. HTML 문서 또는 '영어 문장 | 한국어 번역 | 단어1=뜻;단어2=뜻' 형식인지 확인해 주세요.");
-          return;
-        }
-        const title = pendingWebImport?.title
-          ? `웹 추출: ${pendingWebImport.title}`
-          : `직접 입력 카드 (${parsed.length}문장)`;
-        await loadAndActivateNewDataset(title, parsed);
+        const fallbackTitle = pendingWebImport?.title
+          ? (pendingWebImport.fromYoutube ? `${pendingWebImport.title}` : `웹 추출: ${pendingWebImport.title}`)
+          : "";
+        await createCardsFromText(text, fallbackTitle);
         textPasteArea.value = "";
         pendingWebImport = null;
-        setUrlImportStatus("* 웹페이지의 핵심 영어 문단을 아래 텍스트칸에 붙여넣습니다. CORS 차단 시 읽기용 텍스트 프록시를 사용합니다.");
+        setUrlImportStatus("* 유튜브 주소는 youtubetotext.ai 자막으로, 일반 웹주소는 본문 추출로 자동 처리됩니다.");
       } catch (err) {
-        alert(`텍스트 파싱 오류: ${err.message}`);
+        alert(`카드 생성 오류: ${err.message}`);
       } finally {
         setImportBusy(false);
       }
     });
+
+    // 관심분야 AI 추천 자료 생성
+    if (recommendBtn) {
+      recommendBtn.addEventListener("click", async () => {
+        const interests = (interestInput?.value || "").trim();
+        if (!interests) {
+          alert("관심분야를 먼저 입력해 주세요. (예: 우주, AI, 테슬라)");
+          interestInput?.focus();
+          return;
+        }
+        if (!state.settings.geminiApiKey) {
+          alert("추천 자료 생성에는 Gemini API 키가 필요합니다. 설정에서 키를 입력해 주세요.");
+          openSettings();
+          return;
+        }
+
+        state.settings.interests = interests;
+        saveSettingsToStorage();
+
+        // 최근 추천 제목들을 전달해 같은 주제 반복 방지
+        const recentTopics = Object.values(state.customFiles)
+          .filter(f => /^추천:/.test(f.title))
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+          .slice(0, 5)
+          .map(f => f.title.replace(/^추천:\s*/, ""));
+
+        setImportBusy(true, "추천 생성 중…");
+        setRecommendStatus("관심분야에 맞는 학습 글을 만드는 중입니다…");
+        try {
+          const { title, cards } = await YHAI.generateRecommended({
+            apiKey: state.settings.geminiApiKey,
+            interests,
+            level: state.settings.englishLevel,
+            density: state.settings.cardDensity,
+            recentTopics,
+            onProgress: (msg) => setRecommendStatus(msg)
+          });
+
+          const idPrefix = `rec_${Date.now()}`;
+          const withIds = cards.map((card, i) => ({
+            id: `${idPrefix}_${i}`,
+            speaker: card.speaker,
+            en: card.en,
+            ko: card.ko,
+            notes: card.notes,
+            preserveUnit: true
+          }));
+
+          const ok = await persistAndActivateDataset(`추천: ${title}`, withIds, withIds, { aiGenerated: true });
+          if (ok) {
+            setRecommendStatus(`'${title}' 자료가 만들어졌습니다. 바로 학습을 시작하세요!`, "success");
+            alert(`오늘의 추천 학습 글 [${title}]\n${withIds.length}개 카드가 준비되었습니다.`);
+            closeImportPanel();
+          }
+        } catch (err) {
+          setRecommendStatus(`추천 생성 실패: ${err.message}`, "error");
+        } finally {
+          setImportBusy(false);
+        }
+      });
+    }
 
     // 데스크톱 키보드 단축키
     window.addEventListener("keydown", (e) => {

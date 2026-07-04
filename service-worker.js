@@ -4,22 +4,28 @@
  * - 외부 폰트/CDN: stale-while-revalidate
  * - 외부 사전 사이트: 캐시하지 않음 (네트워크 이동)
  */
-const CACHE_VERSION = "yh-cache-v12";
+const CACHE_VERSION = "yh-cache-v13";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
+  "./ai.js",
   "./default_data.js",
   "./manifest.webmanifest",
   "./icon-192.png",
   "./icon-512.png"
 ];
 
+// API/사전 호스트는 절대 캐시하지 않음 (특히 유튜브 자막 폴링·번역·AI 응답)
 const SKIP_HOSTS = [
   "en.dict.naver.com",
-  "dictionary.cambridge.org"
+  "dictionary.cambridge.org",
+  "api.youtubetotext.ai",
+  "generativelanguage.googleapis.com",
+  "translate.googleapis.com",
+  "r.jina.ai"
 ];
 
 self.addEventListener("install", (event) => {
