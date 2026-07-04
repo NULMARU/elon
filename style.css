@@ -1322,20 +1322,17 @@ input:checked + .toggle-slider:before {
    v2.0.0 — AI 카드 / 유튜브 / 추천 / TTS 개선 UI
    ═══════════════════════════════════════════════ */
 
-/* ── 듣기 버튼 스택 (기본 + 느리게) ── */
-.speak-btn-stack {
+/* ── 카드 상단(화자 옆) 듣기 버튼 ── */
+.speaker-row {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  flex-shrink: 0;
 }
 
-.speak-btn.slow {
-  width: 32px;
-  height: 32px;
-  font-size: 14px;
-  opacity: 0.85;
-  align-self: center;
+.speak-btn.header-speak {
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
 }
 
 /* ── 단어 팝업: AI 문맥 뜻 ── */

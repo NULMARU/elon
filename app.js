@@ -1,6 +1,6 @@
 /**
  * 영한번역 영어 학습 웹앱 - 코어 애플리케이션 스크립트 (app.js)
- * v2.0.0 - AI 학습 카드(Gemini) / 유튜브 자막(youtubetotext.ai) / 관심분야 추천 / TTS 개선
+ * v2.1.0 - ElevenLabs 원어민 TTS / 카드 분량 자동(AI) / 카드 상단 발음 버튼
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -19,11 +19,13 @@ document.addEventListener("DOMContentLoaded", () => {
       ttsVoice: "",
       autoPlay: false,
       alwaysShowTranslation: true,
-      cardDensity: "medium",       // 카드 분량: "short" | "medium" | "long" (임포트 시 청킹 기준)
+      cardDensity: "auto",         // 카드 분량: "auto" | "short" | "medium" | "long" (auto = AI가 맥락 기반 결정)
       autoEnrichImports: true,     // 업로드 자료에 번역/설명이 없을 때 자동 보강
       externalAutoTranslate: true, // 번역 누락 시 외부 번역 서비스 사용 (문장 단위 전송)
       geminiApiKey: "",            // Google AI Studio (Gemini) API 키 — AI 카드/추천/문맥 뜻
       yttApiKey: "",               // youtubetotext.ai API 키 — 유튜브 자막 추출
+      elevenApiKey: "",            // ElevenLabs API 키 — 원어민급 TTS (없으면 기기 내장 음성)
+      elevenVoiceId: "",           // ElevenLabs 음성 ID (빈 값이면 기본 음성)
       interests: "",               // 관심분야 (추천 자료 생성용)
       englishLevel: "intermediate" // 영어 수준: "beginner" | "intermediate" | "advanced"
     },
@@ -100,6 +102,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // AI/API 키·수준 설정
   const geminiKeyInput = document.getElementById("gemini-key-input");
   const yttKeyInput = document.getElementById("ytt-key-input");
+  const elevenKeyInput = document.getElementById("eleven-key-input");
+  const elevenVoiceGroup = document.getElementById("eleven-voice-group");
+  const elevenVoiceSelect = document.getElementById("eleven-voice-select");
   const levelSelect = document.getElementById("level-select");
 
   // 미니 단어 검색 팝업
@@ -282,9 +287,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // v2.1 마이그레이션: 카드 분량 기본값을 '자동(AI 추천)'으로 전환
+  // 이전 기본값(medium)을 그대로 쓰던 사용자만 1회 이전 (짧게/길게를 고른 사용자는 유지)
+  function migrateV21Density() {
+    try {
+      if (localStorage.getItem("yh_density_migrated_v21") === "true") return;
+      const cur = localStorage.getItem("yh_cardDensity");
+      if (!cur || cur === "medium") localStorage.setItem("yh_cardDensity", "auto");
+      localStorage.setItem("yh_density_migrated_v21", "true");
+    } catch (e) { /* 무시 */ }
+  }
+
   // ── 초기화 (Initialization) ──
   async function init() {
     await migrateV2();
+    migrateV21Density();
     loadStateFromStorage();
     state.customFiles = await loadCustomFiles();
 
@@ -318,6 +335,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (geminiKeyInput) geminiKeyInput.value = state.settings.geminiApiKey;
     if (yttKeyInput) yttKeyInput.value = state.settings.yttApiKey;
+    if (elevenKeyInput) elevenKeyInput.value = state.settings.elevenApiKey;
+    populateElevenVoices();
     if (levelSelect) levelSelect.value = state.settings.englishLevel;
     if (interestInput) interestInput.value = state.settings.interests;
     syncDensityUI();
@@ -351,11 +370,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const savedTtsVoice = localStorage.getItem("yh_ttsVoice") || "";
       const savedAutoPlay = localStorage.getItem("yh_autoPlay") === "true";
       const savedAlwaysShow = localStorage.getItem("yh_alwaysShow") !== "false"; // 기본값 true
-      const savedDensity = localStorage.getItem("yh_cardDensity") || "medium";
+      const savedDensity = localStorage.getItem("yh_cardDensity") || "auto";
       const savedAutoEnrich = localStorage.getItem("yh_autoEnrichImports") !== "false"; // 기본값 true
       const savedExternalTranslate = localStorage.getItem("yh_externalAutoTranslate") !== "false"; // 기본값 true
       const savedGeminiKey = localStorage.getItem("yh_geminiApiKey") || "";
       const savedYttKey = localStorage.getItem("yh_yttApiKey") || "";
+      const savedElevenKey = localStorage.getItem("yh_elevenApiKey") || "";
+      const savedElevenVoice = localStorage.getItem("yh_elevenVoiceId") || "";
       const savedInterests = localStorage.getItem("yh_interests") || "";
       const savedLevel = localStorage.getItem("yh_englishLevel") || "intermediate";
       const savedCurrentFile = localStorage.getItem("yh_currentFileId") || "default_interview";
@@ -371,11 +392,13 @@ document.addEventListener("DOMContentLoaded", () => {
         ttsVoice: savedTtsVoice,
         autoPlay: savedAutoPlay,
         alwaysShowTranslation: savedAlwaysShow,
-        cardDensity: (["short", "medium", "long"].includes(savedDensity) ? savedDensity : "medium"),
+        cardDensity: (["auto", "short", "medium", "long"].includes(savedDensity) ? savedDensity : "auto"),
         autoEnrichImports: savedAutoEnrich,
         externalAutoTranslate: savedExternalTranslate,
         geminiApiKey: savedGeminiKey,
         yttApiKey: savedYttKey,
+        elevenApiKey: savedElevenKey,
+        elevenVoiceId: savedElevenVoice,
         interests: savedInterests,
         englishLevel: (["beginner", "intermediate", "advanced"].includes(savedLevel) ? savedLevel : "intermediate")
       };
@@ -402,6 +425,8 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("yh_externalAutoTranslate", state.settings.externalAutoTranslate);
       localStorage.setItem("yh_geminiApiKey", state.settings.geminiApiKey);
       localStorage.setItem("yh_yttApiKey", state.settings.yttApiKey);
+      localStorage.setItem("yh_elevenApiKey", state.settings.elevenApiKey);
+      localStorage.setItem("yh_elevenVoiceId", state.settings.elevenVoiceId);
       localStorage.setItem("yh_interests", state.settings.interests);
       localStorage.setItem("yh_englishLevel", state.settings.englishLevel);
     } catch (e) {
@@ -517,6 +542,54 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       voiceSelect.appendChild(option);
     });
+  }
+
+  // ── ElevenLabs 목소리 목록 구성 (키가 있을 때만 노출) ──
+  async function populateElevenVoices() {
+    if (!elevenVoiceSelect || !elevenVoiceGroup) return;
+
+    if (!state.settings.elevenApiKey || typeof YHAI === "undefined") {
+      elevenVoiceGroup.style.display = "none";
+      return;
+    }
+
+    elevenVoiceGroup.style.display = "";
+    elevenVoiceSelect.innerHTML = "<option value=''>목소리 목록 불러오는 중…</option>";
+
+    try {
+      const voices = await YHAI.listElevenVoices({ apiKey: state.settings.elevenApiKey });
+      elevenVoiceSelect.innerHTML = "";
+
+      if (voices.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "기본 음성 (Rachel)";
+        elevenVoiceSelect.appendChild(option);
+        return;
+      }
+
+      voices.forEach(voice => {
+        const option = document.createElement("option");
+        option.value = voice.voiceId;
+        option.textContent = voice.labels ? `${voice.name} (${voice.labels})` : voice.name;
+        if (voice.voiceId === state.settings.elevenVoiceId) option.selected = true;
+        elevenVoiceSelect.appendChild(option);
+      });
+
+      // 저장된 음성이 계정에 없으면 첫 음성으로 보정
+      if (!voices.some(v => v.voiceId === state.settings.elevenVoiceId)) {
+        state.settings.elevenVoiceId = voices[0].voiceId;
+        elevenVoiceSelect.value = state.settings.elevenVoiceId;
+        saveSettingsToStorage();
+      }
+    } catch (e) {
+      console.warn("ElevenLabs 음성 목록 로드 실패:", e);
+      elevenVoiceSelect.innerHTML = "";
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "목록 로드 실패 — 기본 음성(Rachel) 사용";
+      elevenVoiceSelect.appendChild(option);
+    }
   }
 
   // ── 파일 선택 드롭다운 및 대시보드 채우기 ──
@@ -720,7 +793,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const trusted = isTrustedFile();
     const cardContentHTML = `
       <div class="card-header-info">
-        <span class="speaker-tag">${escapeHtml(data.speaker || "SPEAKER")}</span>
+        <div class="speaker-row">
+          <span class="speaker-tag">${escapeHtml(data.speaker || "SPEAKER")}</span>
+          <button class="speak-btn header-speak" id="card-speak-btn" aria-label="문장 듣기">🔊</button>
+        </div>
         <span>SENTENCE ${state.currentIndex + 1}/${dataset.length}</span>
       </div>
 
@@ -728,10 +804,6 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="sentence-en-container">
           <div class="sentence-en" id="sentence-en-text">
             ${makeWordsClickable(data.en)}
-          </div>
-          <div class="speak-btn-stack">
-            <button class="speak-btn" id="card-speak-btn" aria-label="문장 듣기">🔊</button>
-            <button class="speak-btn slow" id="card-speak-slow-btn" aria-label="느리게 듣기" title="느리게 듣기 (0.7x)">🐢</button>
           </div>
         </div>
       </div>
@@ -912,24 +984,111 @@ document.addEventListener("DOMContentLoaded", () => {
     return chunks.filter(Boolean);
   }
 
+  // ── ElevenLabs 오디오 재생 상태 ──
+  let currentAudio = null;
+  let speechLoading = false;
+  let elevenKeyAlerted = false;
+  const elevenAudioCache = new Map(); // "voiceId|text" → mp3 Object URL (최근 40개)
+
   function stopSpeaking() {
     speechToken += 1;
+    speechLoading = false;
     if (speechKeepAlive) {
       clearInterval(speechKeepAlive);
       speechKeepAlive = null;
     }
-    window.speechSynthesis.cancel();
-    setSpeakButtonActive(false);
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+    if (typeof speechSynthesis !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakButtonState("idle");
   }
 
+  // 발음 듣기 공통 진입점: ElevenLabs 키가 있으면 AI 음성, 없으면 기기 내장 음성
   function speak(text, options = {}) {
-    if (typeof speechSynthesis === "undefined") return;
+    const audioPlaying = currentAudio && !currentAudio.paused;
+    const synthPlaying = typeof speechSynthesis !== "undefined"
+      && (window.speechSynthesis.speaking || window.speechSynthesis.pending);
 
-    // 재생 중 다시 누르면 정지 (토글)
-    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    // 재생(또는 로딩) 중 다시 누르면 정지 (토글)
+    if (audioPlaying || synthPlaying || speechLoading) {
       stopSpeaking();
       return;
     }
+
+    if (state.settings.elevenApiKey && typeof YHAI !== "undefined") {
+      speakWithElevenLabs(text, options);
+      return;
+    }
+    speakWithWebSpeech(text, options);
+  }
+
+  async function speakWithElevenLabs(text, options = {}) {
+    const clean = String(text || "").replace(/<\/?[^>]+(>|$)/g, "").trim();
+    if (!clean) return;
+
+    const myToken = ++speechToken;
+    const voiceId = state.settings.elevenVoiceId || YHAI.ELEVEN_DEFAULT_VOICE;
+    const cacheKey = `${voiceId}|${clean}`;
+
+    try {
+      let url = elevenAudioCache.get(cacheKey);
+      if (!url) {
+        speechLoading = true;
+        setSpeakButtonState("loading");
+        const blob = await YHAI.fetchElevenAudio(clean, {
+          apiKey: state.settings.elevenApiKey,
+          voiceId
+        });
+        speechLoading = false;
+        if (myToken !== speechToken) return; // 로딩 중 취소됨
+
+        url = URL.createObjectURL(blob);
+        elevenAudioCache.set(cacheKey, url);
+        if (elevenAudioCache.size > 40) {
+          const oldest = elevenAudioCache.keys().next().value;
+          URL.revokeObjectURL(elevenAudioCache.get(oldest));
+          elevenAudioCache.delete(oldest);
+        }
+      }
+      if (myToken !== speechToken) return;
+
+      const audio = new Audio(url);
+      audio.playbackRate = options.rate != null ? options.rate : state.settings.ttsSpeed;
+      currentAudio = audio;
+      const done = () => {
+        if (myToken !== speechToken) return;
+        currentAudio = null;
+        setSpeakButtonState("idle");
+      };
+      audio.onended = done;
+      audio.onerror = () => {
+        // 손상된 오디오가 캐시에 남아 반복 실패하지 않도록 제거
+        elevenAudioCache.delete(cacheKey);
+        URL.revokeObjectURL(url);
+        done();
+      };
+      setSpeakButtonState("playing");
+      await audio.play();
+    } catch (err) {
+      speechLoading = false;
+      if (myToken !== speechToken) return;
+      console.warn("ElevenLabs 재생 실패, 기기 내장 음성으로 폴백:", err);
+      if (/API 키|한도/.test(err.message || "") && !elevenKeyAlerted) {
+        elevenKeyAlerted = true; // 같은 안내 반복 방지 (세션당 1회)
+        alert(`${err.message}\n이번에는 기기 내장 음성으로 재생합니다.`);
+      }
+      currentAudio = null;
+      setSpeakButtonState("idle");
+      speakWithWebSpeech(text, options);
+    }
+  }
+
+  function speakWithWebSpeech(text, options = {}) {
+    if (typeof speechSynthesis === "undefined") return;
 
     const chunks = splitForSpeech(text);
     if (chunks.length === 0) return;
@@ -982,10 +1141,14 @@ document.addEventListener("DOMContentLoaded", () => {
     playChunk(0);
   }
 
-  function setSpeakButtonActive(active) {
+  function setSpeakButtonState(mode) {
     const speakBtn = document.getElementById("card-speak-btn");
     if (!speakBtn) return;
-    if (active) {
+    if (mode === "loading") {
+      speakBtn.innerHTML = "⏳";
+      speakBtn.classList.add("speaking");
+      speakBtn.setAttribute("aria-label", "음성 준비 중 (누르면 취소)");
+    } else if (mode === "playing") {
       speakBtn.innerHTML = "⏹️";
       speakBtn.classList.add("speaking");
       speakBtn.setAttribute("aria-label", "음성 중단");
@@ -994,6 +1157,10 @@ document.addEventListener("DOMContentLoaded", () => {
       speakBtn.classList.remove("speaking");
       speakBtn.setAttribute("aria-label", "문장 듣기");
     }
+  }
+
+  function setSpeakButtonActive(active) {
+    setSpeakButtonState(active ? "playing" : "idle");
   }
 
   // ── 이전/다음 문장 내비게이션 ──
@@ -2652,16 +2819,16 @@ document.addEventListener("DOMContentLoaded", () => {
   //  · 스마트 청킹 알고리즘 적용 (맥락, 내용, 중요도, 구분성, 학습자의 편의성 고려)
   // ───────────────────────────────────────────────────────────
 
-  // 카드 분량 예산(목표 단어 수 근사치)
-  const DENSITY_BUDGET = { short: 14, medium: 24, long: 38 };
-  const DENSITY_ORDER = ["short", "medium", "long"];
-  const DENSITY_LABEL = { short: "짧게", medium: "보통", long: "길게" };
+  // 카드 분량 예산(목표 단어 수 근사치) — auto는 AI가 맥락에 맞게 스스로 결정 (휴리스틱 경로에선 보통과 동일)
+  const DENSITY_BUDGET = { auto: 24, short: 14, medium: 24, long: 38 };
+  const DENSITY_ORDER = ["auto", "short", "medium", "long"];
+  const DENSITY_LABEL = { auto: "자동 (AI 추천)", short: "짧게", medium: "보통", long: "길게" };
 
   function syncDensityUI() {
     if (!cardDensitySlider) return;
     const idx = DENSITY_ORDER.indexOf(state.settings.cardDensity);
     cardDensitySlider.value = idx < 0 ? 1 : idx;
-    cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || "보통";
+    cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || DENSITY_LABEL.auto;
   }
 
   // 문장 분리: 긴 문장도 단어 수로 자르지 않고, 실제 종결부호 기준으로만 나눕니다.
@@ -2982,10 +3149,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (currentSentence) speak(currentSentence.en);
         return;
       }
-      if (e.target.closest("#card-speak-slow-btn")) {
-        if (currentSentence) speak(currentSentence.en, { rate: 0.7 });
-        return;
-      }
       if (e.target.closest("#empty-back-btn")) {
         setMode("all");
         return;
@@ -3023,14 +3186,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cardDensitySlider) {
       cardDensitySlider.addEventListener("change", (e) => {
         const idx = parseInt(e.target.value);
-        state.settings.cardDensity = DENSITY_ORDER[idx] || "medium";
-        cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || "보통";
+        state.settings.cardDensity = DENSITY_ORDER[idx] || "auto";
+        cardDensityVal.textContent = DENSITY_LABEL[state.settings.cardDensity] || DENSITY_LABEL.auto;
         saveSettingsToStorage();
         reSegmentCurrentFile();
       });
       cardDensitySlider.addEventListener("input", (e) => {
         const idx = parseInt(e.target.value);
-        cardDensityVal.textContent = DENSITY_LABEL[DENSITY_ORDER[idx]] || "보통";
+        cardDensityVal.textContent = DENSITY_LABEL[DENSITY_ORDER[idx]] || DENSITY_LABEL.auto;
       });
     }
 
@@ -3092,6 +3255,20 @@ document.addEventListener("DOMContentLoaded", () => {
     if (yttKeyInput) {
       yttKeyInput.addEventListener("change", (e) => {
         state.settings.yttApiKey = e.target.value.trim();
+        saveSettingsToStorage();
+      });
+    }
+    if (elevenKeyInput) {
+      elevenKeyInput.addEventListener("change", (e) => {
+        state.settings.elevenApiKey = e.target.value.trim();
+        elevenKeyAlerted = false; // 새 키 입력 시 오류 안내 다시 허용
+        saveSettingsToStorage();
+        populateElevenVoices();
+      });
+    }
+    if (elevenVoiceSelect) {
+      elevenVoiceSelect.addEventListener("change", (e) => {
+        state.settings.elevenVoiceId = e.target.value;
         saveSettingsToStorage();
       });
     }

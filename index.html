@@ -235,11 +235,11 @@
         <div class="setting-group">
           <label>한 페이지 분량 (가져온 파일에 적용)</label>
           <div class="slider-container">
-            <input type="range" id="card-density-slider" class="range-slider" min="0" max="2" step="1" value="1">
-            <span id="card-density-val" class="slider-val">보통</span>
+            <input type="range" id="card-density-slider" class="range-slider" min="0" max="3" step="1" value="0">
+            <span id="card-density-val" class="slider-val">자동 (AI 추천)</span>
           </div>
           <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px;">
-            * 문장 길이·맥락·화자를 고려해 카드 크기를 자동 조정합니다. 기본 인터뷰에는 적용되지 않습니다.
+            * 자동: AI가 글 전체의 맥락과 학습 분량을 보고 카드 단위를 스스로 정합니다. 짧게/보통/길게는 고정 분량입니다. 기본 인터뷰에는 적용되지 않습니다.
           </div>
         </div>
 
@@ -311,12 +311,22 @@
                    placeholder="Google AI Studio (Gemini) API 키">
             <input id="ytt-key-input" class="url-paste-input" type="password" autocomplete="off"
                    placeholder="youtubetotext.ai API 키">
+            <input id="eleven-key-input" class="url-paste-input" type="password" autocomplete="off"
+                   placeholder="ElevenLabs API 키 (원어민급 발음)">
           </div>
           <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.5;">
             * 키는 이 기기 브라우저에만 저장됩니다.<br>
-            * Gemini 키: <strong>aistudio.google.com</strong> → Get API Key에서 발급.<br>
-            * Gemini 키가 있으면 AI 카드 생성·문맥 단어 뜻·추천 자료 기능이 켜집니다.
+            * Gemini 키: <strong>aistudio.google.com</strong> → Get API Key에서 발급 — AI 카드·문맥 뜻·추천 기능.<br>
+            * ElevenLabs 키가 있으면 발음 듣기가 원어민급 AI 음성으로 바뀝니다 (없으면 기기 내장 음성).
           </div>
+        </div>
+
+        <!-- ── ElevenLabs 목소리 선택 ── -->
+        <div class="setting-group" id="eleven-voice-group" style="display: none;">
+          <label>ElevenLabs 목소리</label>
+          <select id="eleven-voice-select" class="settings-select" title="ElevenLabs 음성 선택">
+            <!-- 키 입력 시 계정 음성 목록 자동 로드 -->
+          </select>
         </div>
 
         <!-- ── 영어 수준 설정 ── -->
@@ -331,7 +341,7 @@
 
         <!-- 푸터 안내 -->
         <div class="settings-footer-note">
-          영한번역 v2.0.0 · Smartphone English Study PWA<br>
+          영한번역 v2.1.0 · Smartphone English Study PWA<br>
           Developer: NULMARU · © 2026 NULMARU<br>
           * Space바(번역보기) / 방향키(이동) / Enter(발음) 단축키 지원
         </div>

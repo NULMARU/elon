@@ -115,6 +115,11 @@ window.YHAI = (() => {
 
   // ── 카드 생성 프롬프트 ──
   const DENSITY_RULE = {
+    auto: `카드 분량은 글 전체의 맥락과 학습 효율을 보고 당신이 스스로 결정합니다.
+   - 하나의 카드는 반드시 하나의 생각/의미 단위가 완결되게 합니다 (문장 중간이나 논리 흐름 중간에서 끊지 않음).
+   - 짧고 쉬운 문장들이 같은 흐름이면 2~3개를 하나의 카드로 묶고, 길고 복잡한 문장은 단독 카드로 둡니다.
+   - 대체로 카드 하나에 15~45단어가 되도록 하되, 의미 단위 완결이 단어 수보다 우선입니다.
+   - 대화문이면 화자의 발화(turn) 단위를 존중합니다.`,
     short: "카드 하나는 짧은 문장 1개(대략 8~16단어)로 만듭니다. 긴 문장은 의미가 끊기지 않는 절 단위로 나눕니다.",
     medium: "카드 하나는 1~2문장(대략 18~30단어)으로 만듭니다. 짧은 문장은 같은 흐름의 옆 문장과 묶습니다.",
     long: "카드 하나는 2~3문장(대략 30~50단어)의 문단 단위로 만듭니다. 하나의 생각 흐름이 카드 안에서 완결되게 합니다."
@@ -131,7 +136,7 @@ window.YHAI = (() => {
 아래 [원문]을 영어 독해 학습 카드로 변환해 주세요.
 
 규칙:
-1. ${DENSITY_RULE[density] || DENSITY_RULE.medium}
+1. ${DENSITY_RULE[density] || DENSITY_RULE.auto}
 2. ${LEVEL_RULE[level] || LEVEL_RULE.intermediate}
 3. 영어 원문 문장은 바꾸지 말고 그대로 사용합니다. 단, 유튜브 자막 특유의 오타·대소문자·문장부호 누락은 자연스럽게 교정합니다.
 4. 광고, 메뉴, 구독 요청, 타임스탬프, 채널 소개 등 학습 가치가 없는 텍스트는 카드에서 제외합니다.
@@ -226,7 +231,7 @@ ${text}`;
    * 영문 텍스트 → AI 학습 카드
    * @returns {Promise<{title: string, cards: Array}>}
    */
-  async function generateCards(text, { apiKey, density = "medium", level = "intermediate", onProgress } = {}) {
+  async function generateCards(text, { apiKey, density = "auto", level = "intermediate", onProgress } = {}) {
     const batches = splitIntoBatches(text, 6500);
     const allCards = [];
     let title = "";
@@ -254,7 +259,7 @@ ${text}`;
    * 관심분야 기반 추천 학습 자료 생성
    * @returns {Promise<{title: string, cards: Array}>}
    */
-  async function generateRecommended({ apiKey, interests, level = "intermediate", density = "medium", recentTopics = [], onProgress } = {}) {
+  async function generateRecommended({ apiKey, interests, level = "intermediate", density = "auto", recentTopics = [], onProgress } = {}) {
     if (typeof onProgress === "function") onProgress("관심분야 학습 글을 만드는 중…");
 
     const levelText = {
@@ -276,7 +281,7 @@ ${text}`;
 - 학습 가치가 높은 표현(자주 쓰이는 구문, 콜로케이션)을 의도적으로 포함합니다.${avoid}
 
 그 다음, 작성한 글을 학습 카드로 변환합니다.
-${DENSITY_RULE[density] || DENSITY_RULE.medium}
+${DENSITY_RULE[density] || DENSITY_RULE.auto}
 ${LEVEL_RULE[level] || LEVEL_RULE.intermediate}
 
 각 카드: "speaker"는 "Narrator", "en" 영어 원문, "ko" 자연스러운 한국어 번역,
@@ -404,12 +409,72 @@ JSON만 출력:
     throw new Error("자막 생성 시간이 초과되었습니다 (10분). 긴 영상은 나중에 다시 시도해 주세요.");
   }
 
+  // ───────────────────────────────────────────────
+  // ElevenLabs TTS 클라이언트 (원어민급 음성 합성)
+  // ───────────────────────────────────────────────
+  const ELEVEN_BASE = "https://api.elevenlabs.io/v1";
+  // 기본 음성: Rachel (차분한 미국식 여성 — ElevenLabs 기본 제공)
+  const ELEVEN_DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM";
+  // turbo v2.5: multilingual v2 대비 절반 크레딧, 짧은 문장 학습용으로 충분한 품질
+  const ELEVEN_MODEL = "eleven_turbo_v2_5";
+
+  function elevenError(status) {
+    if (status === 401) return new Error("ElevenLabs API 키가 올바르지 않습니다. 설정에서 키를 확인해 주세요.");
+    if (status === 402 || status === 429) return new Error("ElevenLabs 크레딧/사용량 한도에 도달했습니다.");
+    return new Error(`ElevenLabs 요청 실패 (HTTP ${status})`);
+  }
+
+  /** 계정에서 사용 가능한 음성 목록 → [{voiceId, name, labels}] */
+  async function listElevenVoices({ apiKey } = {}) {
+    if (!apiKey) throw new Error("ElevenLabs API 키가 없습니다.");
+    let res;
+    try {
+      res = await fetch(`${ELEVEN_BASE}/voices`, { headers: { "xi-api-key": apiKey } });
+    } catch (e) {
+      throw new Error("ElevenLabs에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.");
+    }
+    if (!res.ok) throw elevenError(res.status);
+    const data = await res.json();
+    return (data?.voices || []).map(v => ({
+      voiceId: v.voice_id,
+      name: v.name,
+      labels: [v.labels?.gender, v.labels?.accent].filter(Boolean).join(", ")
+    }));
+  }
+
+  /** 텍스트 → mp3 Blob (재생은 호출 측에서 Audio로) */
+  async function fetchElevenAudio(text, { apiKey, voiceId } = {}) {
+    if (!apiKey) throw new Error("ElevenLabs API 키가 없습니다.");
+    const vid = voiceId || ELEVEN_DEFAULT_VOICE;
+    let res;
+    try {
+      res = await fetch(`${ELEVEN_BASE}/text-to-speech/${vid}?output_format=mp3_44100_64`, {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          text: String(text || "").trim(),
+          model_id: ELEVEN_MODEL
+        })
+      });
+    } catch (e) {
+      throw new Error("ElevenLabs에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.");
+    }
+    if (!res.ok) throw elevenError(res.status);
+    return await res.blob();
+  }
+
   return {
     isYoutubeUrl,
     youtubeVideoId,
     generateCards,
     generateRecommended,
     explainWordInContext,
-    fetchYoutubeTranscript
+    fetchYoutubeTranscript,
+    listElevenVoices,
+    fetchElevenAudio,
+    ELEVEN_DEFAULT_VOICE
   };
 })();
